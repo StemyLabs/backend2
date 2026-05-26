@@ -29,21 +29,26 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 import pyloudnorm as pyln
-import signal
+import subprocess
+import sys
 
 # Suppress noisy pedalboard resampling warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pedalboard")
 
-# Catch SIGILL for CPUs that don't support AVX instructions (Render AMD instances)
-class _SigIllError(Exception):
-    pass
-
-def _sigill_handler(signum, frame):
-    raise _SigIllError("CPU does not support required instructions (SIGILL)")
-
-_old_sigill = signal.signal(signal.SIGILL, _sigill_handler)
-
+# Test pedalboard import in a subprocess to avoid SIGILL crashes
+# on CPUs that don't support AVX instructions (Render AMD instances).
 try:
+    _test = subprocess.run(
+        [sys.executable, "-c", "from pedalboard import Pedalboard, HighpassFilter, LowShelfFilter, PeakFilter, HighShelfFilter, Compressor, Limiter, Resample"],
+        capture_output=True, text=True, timeout=15,
+    )
+    PEDALBOARD_AVAILABLE = _test.returncode == 0
+    _PEDALBOARD_ERROR = _test.stderr if not PEDALBOARD_AVAILABLE else ""
+except Exception as _e:
+    PEDALBOARD_AVAILABLE = False
+    _PEDALBOARD_ERROR = str(_e)
+
+if PEDALBOARD_AVAILABLE:
     from pedalboard import (
         Pedalboard,
         HighpassFilter,
@@ -54,12 +59,6 @@ try:
         Limiter,
         Resample,
     )
-    PEDALBOARD_AVAILABLE = True
-except (ImportError, _SigIllError) as e:
-    PEDALBOARD_AVAILABLE = False
-    _PEDALBOARD_ERROR = str(e)
-finally:
-    signal.signal(signal.SIGILL, _old_sigill)
 
 from genres import get_preset, DEFAULT_GENRE
 
