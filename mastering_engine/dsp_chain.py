@@ -61,14 +61,16 @@ def _guess_image_mime(data: bytes) -> str:
     return "image/jpeg"
 
 
-def _db_to_lin(db: float) -> float:
+def _db_to_lin(db):
     return 10.0 ** (db / 20.0)
 
 
-def _lin_to_db(lin: float) -> float:
-    if lin <= 0:
-        return -120.0
-    return 20.0 * np.log10(lin)
+def _lin_to_db(lin):
+    lin = np.asarray(lin, dtype=np.float64)
+    result = 20.0 * np.log10(np.maximum(lin, 1e-12))
+    if lin.ndim == 0:
+        return float(result)
+    return result
 
 
 def _ensure_stereo(audio: np.ndarray) -> np.ndarray:
