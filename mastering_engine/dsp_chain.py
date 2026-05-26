@@ -29,9 +29,19 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 import pyloudnorm as pyln
+import signal
 
 # Suppress noisy pedalboard resampling warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pedalboard")
+
+# Catch SIGILL for CPUs that don't support AVX instructions (Render AMD instances)
+class _SigIllError(Exception):
+    pass
+
+def _sigill_handler(signum, frame):
+    raise _SigIllError("CPU does not support required instructions (SIGILL)")
+
+_old_sigill = signal.signal(signal.SIGILL, _sigill_handler)
 
 try:
     from pedalboard import (
@@ -45,9 +55,11 @@ try:
         Resample,
     )
     PEDALBOARD_AVAILABLE = True
-except ImportError as e:
+except (ImportError, _SigIllError) as e:
     PEDALBOARD_AVAILABLE = False
     _PEDALBOARD_ERROR = str(e)
+finally:
+    signal.signal(signal.SIGILL, _old_sigill)
 
 from genres import get_preset, DEFAULT_GENRE
 
@@ -322,8 +334,8 @@ def master_audio(
     """
     if not PEDALBOARD_AVAILABLE:
         raise RuntimeError(
-            f"pedalboard is not installed: {_PEDALBOARD_ERROR}. "
-            "Run: pip install pedalboard"
+            f"Pedalboard audio engine unavailable: {_PEDALBOARD_ERROR}. "
+            "The server CPU may not support required instructions."
         )
 
     t0 = time.perf_counter()
