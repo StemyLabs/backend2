@@ -35,29 +35,85 @@ import sys
 # Suppress noisy pedalboard resampling warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pedalboard")
 
-# Test pedalboard import in a subprocess to avoid SIGILL crashes
-# on CPUs that don't support AVX instructions (Render AMD instances).
-try:
-    _test = subprocess.run(
-        [sys.executable, "-c", "from pedalboard import Pedalboard, HighpassFilter, LowShelfFilter, PeakFilter, HighShelfFilter, Compressor, Limiter, Resample"],
-        capture_output=True, text=True, timeout=15,
-    )
-    PEDALBOARD_AVAILABLE = _test.returncode == 0
-    _PEDALBOARD_ERROR = (_test.stderr.strip() or "CPU does not support required AVX instructions") if not PEDALBOARD_AVAILABLE else ""
-except Exception as _e:
-    PEDALBOARD_AVAILABLE = False
-    _PEDALBOARD_ERROR = str(_e)
+# ─── Pedalboard availability diagnostics ─────────────────────────────────
+# Test which imports work on the current CPU (Render's AMD may lack AVX).
+_PEDALBOARD_IMPORTS = {}
+_PEDALBOARD_LOADED = []
+
+def _test_import(name: str, import_stmt: str) -> bool:
+    """Test if an import works in a subprocess (avoids SIGILL crash in parent)."""
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", import_stmt],
+            capture_output=True, text=True, timeout=15,
+        )
+        ok = r.returncode == 0
+        _PEDALBOARD_IMPORTS[name] = ok
+        if ok:
+            _PEDALBOARD_LOADED.append(name)
+        return ok
+    except Exception as e:
+        _PEDALBOARD_IMPORTS[name] = False
+        return False
+
+# Level 0: just the module
+_PEDALBOARD_OK = _test_import("pedalboard (module)", "import pedalboard")
+
+# Level 1: basic filters
+if _PEDALBOARD_OK:
+    _test_import("Gain+Highpass+Lowpass", "from pedalboard import Gain, HighpassFilter, LowpassFilter")
+    _test_import("Peak+HighShelf+LowShelf", "from pedalboard import PeakFilter, HighShelfFilter, LowShelfFilter")
+    _test_import("Compressor", "from pedalboard import Compressor")
+    _test_import("Limiter", "from pedalboard import Limiter")
+    _test_import("Resample", "from pedalboard import Resample")
+    _test_import("Pedalboard (class)", "from pedalboard import Pedalboard")
+    _test_import("Full chain", "from pedalboard import Pedalboard, HighpassFilter, LowShelfFilter, PeakFilter, HighShelfFilter, Compressor, Limiter, Resample")
+
+_AVAILABLE = {k for k, v in _PEDALBOARD_IMPORTS.items() if v}
+_MISSING = {k for k, v in _PEDALBOARD_IMPORTS.items() if not v}
+
+if _AVAILABLE:
+    print(f"[DSP] pedalboard OK: {', '.join(sorted(_AVAILABLE))}")
+if _MISSING:
+    print(f"[DSP] pedalboard MISSING (SIGILL on this CPU): {', '.join(sorted(_MISSING))}")
+
+# Try to load what works
+PEDALBOARD_AVAILABLE = "pedalboard (module)" in _AVAILABLE
+_PEDALBOARD_ERROR = ""
 
 if PEDALBOARD_AVAILABLE:
-    from pedalboard import (
-        Pedalboard,
-        HighpassFilter,
-        LowShelfFilter,
-        PeakFilter,
-        HighShelfFilter,
-        Compressor,
-        Limiter,
-        Resample,
+    _pb = []
+    try:
+        import pedalboard as _pb_mod
+        _pb.append(_pb_mod)
+        from pedalboard import Pedalboard
+        _pb.append("Pedalboard")
+
+        if "Gain+Highpass+Lowpass" in _AVAILABLE:
+            from pedalboard import Gain, HighpassFilter, LowpassFilter
+            _pb.extend(["Gain", "HighpassFilter", "LowpassFilter"])
+        if "Peak+HighShelf+LowShelf" in _AVAILABLE:
+            from pedalboard import PeakFilter, HighShelfFilter, LowShelfFilter
+            _pb.extend(["PeakFilter", "HighShelfFilter", "LowShelfFilter"])
+        if "Compressor" in _AVAILABLE:
+            from pedalboard import Compressor
+            _pb.append("Compressor")
+        if "Limiter" in _AVAILABLE:
+            from pedalboard import Limiter
+            _pb.append("Limiter")
+        if "Resample" in _AVAILABLE:
+            from pedalboard import Resample
+            _pb.append("Resample")
+
+        print(f"[DSP] Loaded pedalboard components: {', '.join(_pb)}")
+    except Exception as _e:
+        PEDALBOARD_AVAILABLE = False
+        _PEDALBOARD_ERROR = str(_e)
+        print(f"[DSP] Failed to load pedalboard in parent: {_e}")
+else:
+    _PEDALBOARD_ERROR = (
+        "pedalboard C extension triggers SIGILL on this CPU "
+        "(likely missing AVX instructions)"
     )
 
 from genres import get_preset, DEFAULT_GENRE

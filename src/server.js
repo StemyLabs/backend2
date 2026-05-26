@@ -79,6 +79,16 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok", python: !!env.PYTHON_ENGINE_URL });
 });
 
+app.get("/api/diag", async (req, res) => {
+  try {
+    const r = await fetch(`${env.PYTHON_ENGINE_URL}/diag`, { signal: AbortSignal.timeout(5000) });
+    const data = await r.json();
+    res.json(data);
+  } catch {
+    res.json({ pedalboard_available: false, error: "Python engine unreachable" });
+  }
+});
+
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
