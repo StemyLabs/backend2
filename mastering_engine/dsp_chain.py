@@ -43,7 +43,7 @@ try:
         capture_output=True, text=True, timeout=15,
     )
     PEDALBOARD_AVAILABLE = _test.returncode == 0
-    _PEDALBOARD_ERROR = _test.stderr if not PEDALBOARD_AVAILABLE else ""
+    _PEDALBOARD_ERROR = (_test.stderr.strip() or "CPU does not support required AVX instructions") if not PEDALBOARD_AVAILABLE else ""
 except Exception as _e:
     PEDALBOARD_AVAILABLE = False
     _PEDALBOARD_ERROR = str(_e)
