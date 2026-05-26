@@ -8,16 +8,15 @@ import fs from "fs";
 const ALLOWED_PLANS = ["BASIC", "PRO"];
 
 const checkUserPlan = async (userId) => {
-  return true;
-  // const subscription = await prisma.subscription.findFirst({
-  //   where: { userId },
-  //   orderBy: { createdAt: "desc" },
-  // });
-  // 
-  // if (!subscription) return false;
-  // 
-  // const isActive = ["ACTIVE", "TRIALING"].includes(subscription.status);
-  // return isActive && ALLOWED_PLANS.includes(subscription.plan);
+  const subscription = await prisma.subscription.findFirst({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+  });
+  
+  if (!subscription) return false;
+  
+  const isActive = ["ACTIVE", "TRIALING"].includes(subscription.status);
+  return isActive && ALLOWED_PLANS.includes(subscription.plan);
 };
 
 const ALLOWED_MIME = new Set([

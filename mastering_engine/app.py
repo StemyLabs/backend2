@@ -86,14 +86,7 @@ def index():
 def health():
     return jsonify({"status": "ok", "service": "stemy-mastering-engine"})
 
-@app.route("/diag", methods=["GET"])
-def diag():
-    from dsp_chain import PEDALBOARD_AVAILABLE, _PEDALBOARD_ERROR
-    return jsonify({
-        "pedalboard_available": PEDALBOARD_AVAILABLE,
-        "message": _PEDALBOARD_ERROR,
-        "dsp_backend": "scipy+numpy",
-    })
+
 
 
 @app.route("/genres", methods=["GET"])
