@@ -1,5 +1,5 @@
 """
-dsp_chain.py – Server-side mastering DSP using pedalboard + pyloudnorm.
+dsp_chain.py – Server-side mastering DSP using scipy + numpy + pyloudnorm.
 
 Full chain (matches the frontend Web Audio graph):
   1. High-Pass Filter        (removes sub-sonic rumble)
@@ -23,98 +23,18 @@ import io
 import logging
 import struct
 import time
-import warnings
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 import pyloudnorm as pyln
-import subprocess
-import sys
+import scipy.signal as signal
 
-# Suppress noisy pedalboard resampling warnings
-warnings.filterwarnings("ignore", category=UserWarning, module="pedalboard")
-
-# ─── Pedalboard availability diagnostics ─────────────────────────────────
-# Test which imports work on the current CPU (Render's AMD may lack AVX).
-_PEDALBOARD_IMPORTS = {}
-_PEDALBOARD_LOADED = []
-
-def _test_import(name: str, import_stmt: str) -> bool:
-    """Test if an import works in a subprocess (avoids SIGILL crash in parent)."""
-    try:
-        r = subprocess.run(
-            [sys.executable, "-c", import_stmt],
-            capture_output=True, text=True, timeout=15,
-        )
-        ok = r.returncode == 0
-        _PEDALBOARD_IMPORTS[name] = ok
-        if ok:
-            _PEDALBOARD_LOADED.append(name)
-        return ok
-    except Exception as e:
-        _PEDALBOARD_IMPORTS[name] = False
-        return False
-
-# Level 0: just the module
-_PEDALBOARD_OK = _test_import("pedalboard (module)", "import pedalboard")
-
-# Level 1: basic filters
-if _PEDALBOARD_OK:
-    _test_import("Gain+Highpass+Lowpass", "from pedalboard import Gain, HighpassFilter, LowpassFilter")
-    _test_import("Peak+HighShelf+LowShelf", "from pedalboard import PeakFilter, HighShelfFilter, LowShelfFilter")
-    _test_import("Compressor", "from pedalboard import Compressor")
-    _test_import("Limiter", "from pedalboard import Limiter")
-    _test_import("Resample", "from pedalboard import Resample")
-    _test_import("Pedalboard (class)", "from pedalboard import Pedalboard")
-    _test_import("Full chain", "from pedalboard import Pedalboard, HighpassFilter, LowShelfFilter, PeakFilter, HighShelfFilter, Compressor, Limiter, Resample")
-
-_AVAILABLE = {k for k, v in _PEDALBOARD_IMPORTS.items() if v}
-_MISSING = {k for k, v in _PEDALBOARD_IMPORTS.items() if not v}
-
-if _AVAILABLE:
-    print(f"[DSP] pedalboard OK: {', '.join(sorted(_AVAILABLE))}")
-if _MISSING:
-    print(f"[DSP] pedalboard MISSING (SIGILL on this CPU): {', '.join(sorted(_MISSING))}")
-
-# Try to load what works
-PEDALBOARD_AVAILABLE = "pedalboard (module)" in _AVAILABLE
-_PEDALBOARD_ERROR = ""
-
-if PEDALBOARD_AVAILABLE:
-    _pb = []
-    try:
-        import pedalboard as _pb_mod
-        _pb.append(_pb_mod)
-        from pedalboard import Pedalboard
-        _pb.append("Pedalboard")
-
-        if "Gain+Highpass+Lowpass" in _AVAILABLE:
-            from pedalboard import Gain, HighpassFilter, LowpassFilter
-            _pb.extend(["Gain", "HighpassFilter", "LowpassFilter"])
-        if "Peak+HighShelf+LowShelf" in _AVAILABLE:
-            from pedalboard import PeakFilter, HighShelfFilter, LowShelfFilter
-            _pb.extend(["PeakFilter", "HighShelfFilter", "LowShelfFilter"])
-        if "Compressor" in _AVAILABLE:
-            from pedalboard import Compressor
-            _pb.append("Compressor")
-        if "Limiter" in _AVAILABLE:
-            from pedalboard import Limiter
-            _pb.append("Limiter")
-        if "Resample" in _AVAILABLE:
-            from pedalboard import Resample
-            _pb.append("Resample")
-
-        print(f"[DSP] Loaded pedalboard components: {', '.join(_pb)}")
-    except Exception as _e:
-        PEDALBOARD_AVAILABLE = False
-        _PEDALBOARD_ERROR = str(_e)
-        print(f"[DSP] Failed to load pedalboard in parent: {_e}")
-else:
-    _PEDALBOARD_ERROR = (
-        "pedalboard C extension triggers SIGILL on this CPU "
-        "(likely missing AVX instructions)"
-    )
+# Pedalboard is intentionally not used: its C extension requires AVX
+# instructions which are unavailable on this CPU. All DSP is implemented
+# with pure numpy + scipy, which work on every x86-64 CPU.
+PEDALBOARD_AVAILABLE = False
+_PEDALBOARD_ERROR = "replaced with scipy/numpy (no AVX needed)"
 
 from genres import get_preset, DEFAULT_GENRE
 
@@ -353,6 +273,88 @@ def _soft_clip_saturation(audio: np.ndarray, drive: float) -> np.ndarray:
     return out.astype(np.float32)
 
 
+# ─────────────────────────── compressor (pure numpy) ─────────────────────────
+
+def _compressor(audio: np.ndarray, sr: int, cfg: dict) -> np.ndarray:
+    """
+    Feed-forward bus compressor with soft knee, attack/release smoothing.
+    Matches the Web Audio DynamicsCompressor in main.js.
+    """
+    threshold_db = cfg["threshold_db"]
+    ratio = cfg["ratio"]
+    attack_ms = cfg["attack_ms"]
+    release_ms = cfg["release_ms"]
+    knee_db = cfg.get("knee_db", 0.0)
+    threshold = _db_to_lin(threshold_db)
+
+    # Envelope follower: peak/RMS detector
+    env = np.max(np.abs(audio), axis=1)
+    env_db = _lin_to_db(env + 1e-12)
+
+    # Soft knee gain computer
+    overlap = env_db - threshold_db
+    if knee_db > 0:
+        half_knee = knee_db / 2
+        below = overlap <= -half_knee
+        knee_zone = (np.abs(overlap) < half_knee)
+        above = overlap >= half_knee
+        gain_db = np.zeros_like(overlap)
+        gain_db[below] = 0.0
+        gain_db[knee_zone] = (overlap[knee_zone] + half_knee) ** 2 / (2 * knee_db) * (1 / ratio - 1)
+        gain_db[above] = overlap[above] * (1 / ratio - 1)
+    else:
+        gain_db = np.where(overlap > 0, overlap * (1 / ratio - 1), 0.0)
+
+    gain_linear = _db_to_lin(gain_db)
+
+    # Attack/release smoothing (exponential moving average)
+    attack_coeff = np.exp(-1.0 / (sr * attack_ms / 1000))
+    release_coeff = np.exp(-1.0 / (sr * release_ms / 1000))
+    smoothed = np.zeros_like(gain_linear)
+    state = 1.0
+    for i in range(len(gain_linear)):
+        coeff = attack_coeff if gain_linear[i] < state else release_coeff
+        state = state + (1 - coeff) * (gain_linear[i] - state)
+        smoothed[i] = state
+
+    return (audio.T * smoothed).T.astype(np.float32)
+
+
+# ─────────────────────────── brickwall limiter (pure numpy) ──────────────────
+
+def _limiter(audio: np.ndarray, sr: int, threshold_db: float, release_ms: float) -> np.ndarray:
+    """
+    Brickwall limiter with lookahead and release smoothing.
+    """
+    lookahead_samples = int(sr * 0.001)  # 1 ms lookahead
+    threshold = _db_to_lin(threshold_db)
+
+    # Pad for lookahead
+    padded = np.pad(audio, ((lookahead_samples, 0), (0, 0)), mode="edge")
+
+    # Envelope follower with lookahead
+    env = np.zeros(len(audio))
+    for i in range(len(audio)):
+        window = padded[i:i + lookahead_samples + 1]
+        env[i] = float(np.max(np.abs(window)))
+
+    # Gain computer
+    gain = np.where(env > threshold, threshold / (env + 1e-12), 1.0)
+
+    # Release smoothing
+    release_coeff = np.exp(-1.0 / (sr * release_ms / 1000))
+    smoothed = np.zeros_like(gain)
+    state = 1.0
+    for i in range(len(gain)):
+        if gain[i] < state:
+            state = gain[i]
+        else:
+            state = state + (1 - release_coeff) * (gain[i] - state)
+        smoothed[i] = state
+
+    return (audio.T * smoothed).T.astype(np.float32)
+
+
 # ─────────────────────────── main mastering function ────────────────────────
 
 def master_audio(
@@ -387,12 +389,6 @@ def master_audio(
         - genre   : genre used for mastering
         - target_lufs : target LUFS requested
     """
-    if not PEDALBOARD_AVAILABLE:
-        raise RuntimeError(
-            f"Pedalboard audio engine unavailable: {_PEDALBOARD_ERROR}. "
-            "The server CPU may not support required instructions."
-        )
-
     t0 = time.perf_counter()
 
     preset = get_preset(genre)
@@ -411,33 +407,79 @@ def master_audio(
     log.info("Input: %d samples @ %d Hz, %.2f s", len(audio), src_sr, input_dur)
 
     # ── 2. Resample to 44 100 Hz if necessary ───────────────────────────────
+    sr = src_sr
     if src_sr != TARGET_SR:
-        # Use pedalboard's built-in resampler (no scipy needed)
-        resample_board = Pedalboard([Resample(target_sample_rate=TARGET_SR)])
-        audio_pb = audio.T
-        audio_pb = resample_board.process(audio_pb, sample_rate=src_sr)
-        audio = audio_pb.T.astype(np.float32)
-        log.info("Resampled %d → %d Hz", src_sr, TARGET_SR)
-    sr = TARGET_SR
+        gcd = int(np.gcd(src_sr, TARGET_SR))
+        up = TARGET_SR // gcd
+        down = src_sr // gcd
+        audio = signal.resample_poly(audio, up, down, axis=0)
+        sr = TARGET_SR
+        log.info("Resampled %d → %d Hz (up=%d down=%d)", src_sr, TARGET_SR, up, down)
     log.info("Load+resample: %.1fs", time.perf_counter() - t0)
 
-    # ── 3. Build pedalboard EQ + compressor chain ────────────────────────────
+    # ── 3. Build EQ + compressor chain (pure scipy/numpy) ────────────────────
     t1 = time.perf_counter()
     p = preset
     comp_cfg = p["comp"]
 
-    board = Pedalboard([
-        HighpassFilter(cutoff_frequency_hz=p["hpf_hz"]),
-        LowShelfFilter(cutoff_frequency_hz=p["low_shelf"]["freq_hz"], gain_db=p["low_shelf"]["gain_db"]),
-        PeakFilter(cutoff_frequency_hz=p["mid_dip"]["freq_hz"], gain_db=p["mid_dip"]["gain_db"], q=p["mid_dip"]["q"]),
-        PeakFilter(cutoff_frequency_hz=p["presence"]["freq_hz"], gain_db=p["presence"]["gain_db"], q=p["presence"]["q"]),
-        HighShelfFilter(cutoff_frequency_hz=p["air_shelf"]["freq_hz"], gain_db=p["air_shelf"]["gain_db"]),
-        Compressor(threshold_db=comp_cfg["threshold_db"], ratio=comp_cfg["ratio"], attack_ms=comp_cfg["attack_ms"], release_ms=comp_cfg["release_ms"]),
-    ])
+    # ── 3a. High-pass filter ────────────────────────────────────────────────
+    hp_sos = signal.butter(4, p["hpf_hz"], btype="high", fs=sr, output="sos")
+    audio = signal.sosfilt(hp_sos, audio, axis=0)
 
-    audio_pb = audio.T
-    audio_pb = board.process(audio_pb, sample_rate=sr)
-    audio = audio_pb.T
+    # ── 3b. Low-shelf filter ────────────────────────────────────────────────
+    w0 = 2 * np.pi * p["low_shelf"]["freq_hz"] / sr
+    A = 10 ** (p["low_shelf"]["gain_db"] / 40)
+    alpha = np.sin(w0) / (2 * 0.707)
+    cos_w0 = np.cos(w0)
+    b0 = A * ((A + 1) - (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha)
+    b1 = 2 * A * ((A - 1) - (A + 1) * cos_w0)
+    b2 = A * ((A + 1) - (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha)
+    a0 = (A + 1) + (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha
+    a1 = -2 * ((A - 1) + (A + 1) * cos_w0)
+    a2 = (A + 1) + (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha
+    audio = signal.lfilter([b0/a0, b1/a0, b2/a0], [1.0, a1/a0, a2/a0], audio, axis=0)
+
+    # ── 3c. Mid-dip peaking filter ──────────────────────────────────────────
+    w0 = 2 * np.pi * p["mid_dip"]["freq_hz"] / sr
+    A = 10 ** (p["mid_dip"]["gain_db"] / 40)
+    alpha = np.sin(w0) / (2 * p["mid_dip"]["q"])
+    cos_w0 = np.cos(w0)
+    b0 = 1 + alpha * A
+    b1 = -2 * cos_w0
+    b2 = 1 - alpha * A
+    a0 = 1 + alpha / A
+    a1 = -2 * cos_w0
+    a2 = 1 - alpha / A
+    audio = signal.lfilter([b0/a0, b1/a0, b2/a0], [1.0, a1/a0, a2/a0], audio, axis=0)
+
+    # ── 3d. Presence peaking filter ─────────────────────────────────────────
+    w0 = 2 * np.pi * p["presence"]["freq_hz"] / sr
+    A = 10 ** (p["presence"]["gain_db"] / 40)
+    alpha = np.sin(w0) / (2 * p["presence"]["q"])
+    cos_w0 = np.cos(w0)
+    b0 = 1 + alpha * A
+    b1 = -2 * cos_w0
+    b2 = 1 - alpha * A
+    a0 = 1 + alpha / A
+    a1 = -2 * cos_w0
+    a2 = 1 - alpha / A
+    audio = signal.lfilter([b0/a0, b1/a0, b2/a0], [1.0, a1/a0, a2/a0], audio, axis=0)
+
+    # ── 3e. Air shelf (high-shelf) filter ───────────────────────────────────
+    w0 = 2 * np.pi * p["air_shelf"]["freq_hz"] / sr
+    A = 10 ** (p["air_shelf"]["gain_db"] / 40)
+    alpha = np.sin(w0) / (2 * 0.707)
+    cos_w0 = np.cos(w0)
+    b0 = A * ((A + 1) + (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha)
+    b1 = -2 * A * ((A - 1) + (A + 1) * cos_w0)
+    b2 = A * ((A + 1) + (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha)
+    a0 = (A + 1) - (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha
+    a1 = 2 * ((A - 1) - (A + 1) * cos_w0)
+    a2 = (A + 1) - (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha
+    audio = signal.lfilter([b0/a0, b1/a0, b2/a0], [1.0, a1/a0, a2/a0], audio, axis=0)
+
+    # ── 3f. Compressor (pure numpy) ─────────────────────────────────────────
+    audio = _compressor(audio, sr, comp_cfg)
     audio = audio * _db_to_lin(comp_cfg.get("makeup_db", 0.0))
     log.info("EQ+Compressor: %.1fs", time.perf_counter() - t1)
 
@@ -451,21 +493,15 @@ def master_audio(
     audio = _ms_widen(audio, p.get("width", 1.0))
     log.info("Stereo widen: %.1fs", time.perf_counter() - t3)
 
-    # ── 6. LUFS normalisation ────────────────────────────────────────────────
+    # ── 6. LUFS normalisation + limiter ──────────────────────────────────────
     t4 = time.perf_counter()
-    limiter = Pedalboard([
-        Limiter(threshold_db=p["limiter"]["threshold_db"], release_ms=p["limiter"]["release_ms"])
-    ])
-
     measured_lufs = _lufs(audio, sr)
     if np.isfinite(measured_lufs) and measured_lufs > -70:
         gain_needed = float(np.clip(target_lufs - measured_lufs, -MAX_GAIN_DB, MAX_GAIN_DB))
         log.info("LUFS=%.2f gain=%.2fdB", measured_lufs, gain_needed)
         audio = audio * _db_to_lin(gain_needed)
 
-    audio_pb = audio.T
-    audio_pb = limiter.process(audio_pb, sample_rate=sr)
-    audio = audio_pb.T
+    audio = _limiter(audio, sr, p["limiter"]["threshold_db"], p["limiter"]["release_ms"])
     log.info("LUFS+limiter: %.1fs", time.perf_counter() - t4)
 
     # ── 7. Hard ceiling ──────────────────────────────────────────────────────

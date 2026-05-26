@@ -1,6 +1,6 @@
 flask>=3.0.0
 flask-cors>=4.0.0
-pedalboard==0.7.0
+scipy>=1.11.0
 numpy>=1.26.4
 soundfile>=0.12.1
 pyloudnorm>=0.1.1

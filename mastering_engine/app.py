@@ -88,11 +88,11 @@ def health():
 
 @app.route("/diag", methods=["GET"])
 def diag():
-    from dsp_chain import _PEDALBOARD_IMPORTS, _PEDALBOARD_LOADED, PEDALBOARD_AVAILABLE
+    from dsp_chain import PEDALBOARD_AVAILABLE, _PEDALBOARD_ERROR
     return jsonify({
         "pedalboard_available": PEDALBOARD_AVAILABLE,
-        "import_results": {k: "ok" if v else "SIGILL" for k, v in _PEDALBOARD_IMPORTS.items()},
-        "loaded": _PEDALBOARD_LOADED,
+        "message": _PEDALBOARD_ERROR,
+        "dsp_backend": "scipy+numpy",
     })
 
 
