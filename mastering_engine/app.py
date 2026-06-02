@@ -33,7 +33,7 @@ from flask import Flask, jsonify, request, send_file, abort
 from flask_cors import CORS
 
 from genres import GENRES, DEFAULT_GENRE, get_preset
-from dsp_chain import master_audio, TARGET_LUFS, TARGET_TP_DB
+from dsp_chain import master_audio, TARGET_LUFS, TARGET_TP_DB, DurationTooLongError, MasteringError
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -96,6 +96,13 @@ def genres():
     return jsonify(data)
 
 
+def _fetch_bytes_from_url(url: str, timeout: int = 120) -> bytes:
+    log.info("[QUICK MASTER] Fetching source from URL (stream-to-Python mode)")
+    req = urllib.request.Request(url, headers={"User-Agent": "Stemy/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
 @app.route("/master", methods=["POST", "OPTIONS"])
 def master():
     # CORS pre-flight
@@ -104,30 +111,30 @@ def master():
         return ("", 204, _cors_headers())
 
     log.info("[QUICK MASTER] New mastering request received")
-    log.info("[QUICK MASTER] Request headers: %s", dict(request.headers))
     log.info("[QUICK MASTER] Request form data: %s", dict(request.form))
     log.info("[QUICK MASTER] Request files: %s", list(request.files.keys()))
 
-    # ── Validate file ────────────────────────────────────────────────────────
-    if "file" not in request.files:
-        log.error("[QUICK MASTER] Missing 'file' field in multipart form")
-        abort(400, description="Missing 'file' field in multipart form.")
+    source_url = (request.form.get("source_url") or "").strip()
+    f = request.files.get("file")
+    filename = None
 
-    f = request.files["file"]
-    log.info("[QUICK MASTER] File received: %s", f.filename)
-    log.info("[QUICK MASTER] File content type: %s", f.content_type)
-    log.info("[QUICK MASTER] File size: %s bytes", f.content_length)
-    
-    if not f.filename:
-        log.error("[QUICK MASTER] Empty filename")
-        abort(400, description="Empty filename.")
+    # ── Validate input source ───────────────────────────────────────────────
+    if source_url:
+        filename = request.form.get("filename") or "track.mp3"
+        log.info("[QUICK MASTER] Source URL mode: %s", filename)
+    elif f and f.filename:
+        filename = f.filename
+        log.info("[QUICK MASTER] File upload mode: %s", filename)
+    else:
+        log.error("[QUICK MASTER] Missing 'file' or 'source_url'")
+        abort(400, description="Missing audio source. Provide 'file' or 'source_url'.")
 
-    if not _is_allowed(f.filename):
-        log.error("[QUICK MASTER] Unsupported file type: %s", f.filename)
+    if not _is_allowed(filename):
+        log.error("[QUICK MASTER] Unsupported file type: %s", filename)
         abort(
             415,
             description=(
-                f"Unsupported file type '{Path(f.filename).suffix}'. "
+                f"Unsupported file type '{Path(filename).suffix}'. "
                 f"Accepted: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
             ),
         )
@@ -181,9 +188,8 @@ def master():
     t_tp   = preset.get("target_tp_db", TARGET_TP_DB)
 
     log.info(
-        "[QUICK MASTER] Processing request — file=%s size=%s genre=%s target=%.1f LUFS / %.1f dBTP",
-        f.filename,
-        f"{f.content_length // 1024} KB" if f.content_length else "?",
+        "[QUICK MASTER] Processing request — file=%s genre=%s target=%.1f LUFS / %.1f dBTP",
+        filename,
         genre,
         t_lufs,
         t_tp,
@@ -191,12 +197,16 @@ def master():
 
     # ── Read raw bytes ────────────────────────────────────────────────────────
     try:
-        log.info("[QUICK MASTER] Reading file bytes...")
-        raw = f.read()
-        log.info("[QUICK MASTER] Successfully read %d bytes", len(raw))
+        if source_url:
+            log.info("[QUICK MASTER] Downloading source bytes from signed URL...")
+            raw = _fetch_bytes_from_url(source_url)
+        else:
+            log.info("[QUICK MASTER] Reading uploaded file bytes...")
+            raw = f.read()
+        log.info("[QUICK MASTER] Successfully loaded %d bytes", len(raw))
     except Exception as exc:
-        log.error("[QUICK MASTER] Failed to read upload: %s", exc)
-        abort(500, description="Could not read uploaded file.")
+        log.error("[QUICK MASTER] Failed to load source audio: %s", exc)
+        abort(500, description="Could not load source audio.")
 
     # ── Run mastering chain ───────────────────────────────────────────────────
     t_start = time.perf_counter()
@@ -210,9 +220,16 @@ def master():
             metadata=metadata,
             artwork_bytes=art_bytes,
         )
+        del raw
         log.info("[QUICK MASTER] Audio processing completed. Output size: %d bytes", len(wav_bytes))
+    except DurationTooLongError as exc:
+        log.warning("[QUICK MASTER] Track too long: %s", exc)
+        abort(413, description=str(exc))
+    except MasteringError as exc:
+        log.error("[QUICK MASTER] Mastering rejected: %s", exc)
+        abort(400, description=str(exc))
     except Exception as exc:
-        log.exception("[QUICK MASTER] Mastering failed for %s: %s", f.filename, exc)
+        log.exception("[QUICK MASTER] Mastering failed for %s: %s", filename, exc)
         abort(
             500,
             description=(
@@ -233,7 +250,7 @@ def master():
     )
 
     # ── Build download filename ───────────────────────────────────────────────
-    stem = Path(f.filename).stem
+    stem = Path(filename).stem
     download_name = f"{stem}_mastered_{genre}.wav"
 
     # ── Return WAV ────────────────────────────────────────────────────────────
@@ -259,6 +276,7 @@ def master():
 # ─── JSON error handlers ──────────────────────────────────────────────────────
 
 @app.errorhandler(400)
+@app.errorhandler(413)
 @app.errorhandler(415)
 @app.errorhandler(500)
 def json_error(exc):

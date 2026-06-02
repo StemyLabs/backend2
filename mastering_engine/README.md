@@ -211,6 +211,26 @@ If numba fails to import or compile on your instance, the engine automatically f
 STEMY_DISABLE_NUMBA=1
 ```
 
+### Render memory limits (OOM restarts)
+
+Node and Python run **in the same container** via `start.sh`. A 27 MB MP3 can decode to **30+ minutes** of audio (~600 MB+ in RAM). That can exceed Render memory and cause a silent instance restart mid-job.
+
+Production defaults in `start.sh`:
+
+```bash
+STEMY_DISABLE_NUMBA=1
+MAX_MASTER_DURATION_SEC=900    # 15 minute max per track
+MALLOC_ARENA_MAX=2
+```
+
+On a larger Render instance (4 GB+), increase the limit:
+
+```bash
+MAX_MASTER_DURATION_SEC=1800   # 30 minutes
+```
+
+The worker sends a signed **R2 URL** to Python instead of buffering the file in Node, which cuts Node RAM during mastering.
+
 **What you get without numba:** vectorized limiter + single-pass EQ still run (much faster than the original code). Only the compressor envelope loop stays in plain Python, which is slow on 20–30 minute files.
 
 Check startup logs for one of:

@@ -11,6 +11,7 @@ import os from "os";
 
 const TMP_DIR = path.join(os.tmpdir(), "stemy-masters");
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+export const SOURCE_DIR = path.join(os.tmpdir(), "stemy-sources");
 
 const redisConnection = env.REDIS_URL
   ? new Redis(env.REDIS_URL, { maxRetriesPerRequest: null })
@@ -19,9 +20,6 @@ const redisConnection = env.REDIS_URL
 export const masteringQueue = redisConnection
   ? new Queue("mastering", { connection: redisConnection })
   : null;
-
-// Buffer cache — keeps source in memory so first attempt avoids R2 round-trip
-const bufferCache = new Map();
 
 // Download cache — maps masterId to local temp file path for fast serving
 const downloadCache = new Map();
@@ -51,20 +49,38 @@ if (redisConnection) {
           data: { status: "PROCESSING" },
         });
 
-        // ── Get source buffer (cache first, fallback R2) ────────
-        let srcBuf = bufferCache.get(masterId);
-        if (srcBuf) bufferCache.delete(masterId);
+        // ── Get source (local temp file preferred, fall back to R2) ───
+        let srcBuf = null;
+        let sourceDownloadUrl = null;
+        let sourceR2Promise = null;
 
-        if (!srcBuf) {
-          const sourceDownloadUrl = await getDownloadUrl(master.sourceUrl);
+        const sourcePath = job.data.sourcePath;
+        if (sourcePath && fs.existsSync(sourcePath)) {
+          srcBuf = fs.readFileSync(sourcePath);
+          console.log("[QUICK MASTER] Source read from local temp file:", sourcePath);
+          marks.push(T("local_src"));
+
+          // Upload source to R2 in background for persistence (crash recovery)
+          sourceR2Promise = uploadBuffer({
+            key: master.sourceUrl,
+            body: srcBuf,
+            contentType: master.sourceMime || "audio/mpeg",
+          }).then((url) => {
+            console.log("[QUICK MASTER] Source uploaded to R2:", url);
+            return prisma.master.update({
+              where: { id: masterId },
+              data: { sourceUrl: url },
+            });
+          }).catch((err) => {
+            console.warn("[QUICK MASTER] Source R2 upload failed (non-fatal):", err.message);
+          });
+        } else {
+          // Fall back to R2 signed URL (handles retries after crash / no local file)
+          sourceDownloadUrl = await getDownloadUrl(master.sourceUrl);
           marks.push(T("signed_url"));
-          const sourceResponse = await fetch(sourceDownloadUrl);
-          if (!sourceResponse.ok) throw new Error("Failed to download source audio");
-          srcBuf = await sourceResponse.arrayBuffer();
         }
-        marks.push(T("get_src"));
 
-        if (srcBuf.byteLength > 150 * 1024 * 1024)
+        if (srcBuf && srcBuf.byteLength > 150 * 1024 * 1024)
           throw new Error("File too large. Maximum size is 150MB");
 
         // ── Download artwork from R2 if present ─────────────────────────
@@ -84,8 +100,15 @@ if (redisConnection) {
 
         // ── Send to Python Mastering Engine ────────────────────
         const formData = new FormData();
-        formData.append("file", new Blob([srcBuf], { type: master.sourceMime }), master.sourceName);
+        if (srcBuf) {
+          formData.append("file", new Blob([srcBuf], { type: master.sourceMime }), master.sourceName);
+          srcBuf = null;
+        } else {
+          formData.append("source_url", sourceDownloadUrl);
+          formData.append("filename", master.sourceName);
+        }
         formData.append("genre", master.genre);
+        marks.push(T("get_src"));
         const meta = master.metadata;
         if (meta) {
           const metaStr = typeof meta === "string" ? meta : JSON.stringify(meta);
@@ -179,25 +202,33 @@ if (redisConnection) {
         });
         marks.push(T("db_update"));
 
-        // ── Upload output to R2 in background (don't await) ──────────
-        const outputUrlPromise = (async () => {
+        // ── Upload output to R2 in background (source already uploading) ──
+        const r2UploadPromise = (async () => {
           const fileBuf = fs.readFileSync(tmpPath);
-          const result = await uploadBuffer({
+          const outputUrl = await uploadBuffer({
             key: outputKey,
             body: fileBuf,
             contentType: "audio/wav",
           });
+
+          // Wait for source R2 upload to finish too
+          await sourceR2Promise;
+
           await prisma.master.update({
             where: { id: masterId },
-            data: { outputUrl: result },
+            data: { outputUrl },
           });
 
-          // Keep temp file for 5 min, then clean up
+          // Clean up source temp file
+          if (sourcePath && fs.existsSync(sourcePath)) {
+            fs.unlink(sourcePath, () => {});
+          }
+
+          // Keep output temp file for 5 min for fast downloads, then clean up
           setTimeout(() => {
             downloadCache.delete(masterId);
             fs.unlink(tmpPath, () => {});
           }, 300000);
-          return result;
         })();
 
         // Notify user
@@ -211,15 +242,21 @@ if (redisConnection) {
 
         // ── Timing summary ─────────────────────────────────────
         const fmt = (a, b) => `${((b[0] - a[0]) / 1000).toFixed(1)}s`;
-        const srcMB = (srcBuf.byteLength / 1024 / 1024).toFixed(1);
+        const srcMB = master.sourceSize
+          ? (master.sourceSize / 1024 / 1024).toFixed(1)
+          : "?";
         const outMB = outputLength ? (outputLength / 1024 / 1024).toFixed(1) : "?";
+        const m1 = marks[1];
+        const m2 = marks[2] || marks[1];
+        const m3 = marks[3] || marks[2];
+        const m4 = marks[4] || marks[3];
         console.log(`\n═══ MASTER TIMINGS ═══`);
-        console.log(`  Get source     ${fmt(marks[0], marks[1])}  (${srcMB} MB)`);
-        console.log(`  Python engine  ${fmt(marks[1], marks[2])}  (py=${(parseInt(pyTime||0)/1000).toFixed(1)}s)`);
-        console.log(`  Write local    ${fmt(marks[2], marks[3])}  (${outMB} MB)`);
-        console.log(`  DB update      ${fmt(marks[3], marks[4])}`);
+        console.log(`  Get source     ${fmt(marks[0], m1)}  (${srcMB} MB)`);
+        console.log(`  Python engine  ${fmt(m1, m2)}  (py=${(parseInt(pyTime||0)/1000).toFixed(1)}s)`);
+        console.log(`  Write local    ${fmt(m2, m3)}  (${outMB} MB)`);
+        console.log(`  DB update      ${fmt(m3, m4)}`);
         console.log(`  ─────────────────────────────`);
-        console.log(`  USER READY     ${fmt(marks[0], marks[4])}${processingTimeMs != null ? `  (total=${(processingTimeMs / 1000).toFixed(1)}s)` : ""}`);
+        console.log(`  USER READY     ${fmt(marks[0], m4)}${processingTimeMs != null ? `  (total=${(processingTimeMs / 1000).toFixed(1)}s)` : ""}`);
         console.log(`  ─────────────────────────────`);
         console.log(`  R2 upload runs in background`);
         console.log(`═══════════════════════════════\n`);
@@ -228,7 +265,7 @@ if (redisConnection) {
         throw error;
       }
     },
-    { connection: redisConnection, drainDelay: 200 },
+    { connection: redisConnection, drainDelay: 200, concurrency: 1 },
   );
 
   worker.on("failed", async (job, error) => {
@@ -240,9 +277,7 @@ if (redisConnection) {
   });
 }
 
-export const enqueueMasteringJob = async (masterId, sourceBuffer) => {
-  if (sourceBuffer) bufferCache.set(masterId, sourceBuffer);
-
+export const enqueueMasteringJob = async (masterId, sourcePath) => {
   if (!masteringQueue) {
     await prisma.master.update({
       where: { id: masterId },
@@ -256,7 +291,7 @@ export const enqueueMasteringJob = async (masterId, sourceBuffer) => {
     return;
   }
 
-  await masteringQueue.add("process", { masterId });
+  await masteringQueue.add("process", { masterId, sourcePath });
 };
 
 // Export for download endpoint to serve local files

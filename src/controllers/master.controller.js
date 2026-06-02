@@ -1,9 +1,10 @@
 import { prisma } from "../lib/prisma.js";
 import { uploadBuffer, getDownloadUrl } from "../services/storage.service.js";
-import { enqueueMasteringJob, getLocalDownloadPath } from "../services/queue.service.js";
+import { enqueueMasteringJob, getLocalDownloadPath, SOURCE_DIR } from "../services/queue.service.js";
 import https from "https";
 import http from "http";
 import fs from "fs";
+import path from "path";
 
 const ALLOWED_PLANS = ["BASIC", "PRO"];
 
@@ -91,14 +92,12 @@ export const createQuickMaster = async (req, res) => {
       console.log("[QUICK MASTER] Artwork uploaded to:", artUrl);
     }
 
-    console.log("[QUICK MASTER] Uploading source to storage...");
+    console.log("[QUICK MASTER] Writing source to local temp file...");
     const sourceKey = `masters/${req.userId}/${Date.now()}-${file.originalname}`;
-    const sourceUrl = await uploadBuffer({
-      key: sourceKey,
-      body: file.buffer,
-      contentType: file.mimetype || "application/octet-stream",
-    });
-    console.log("[QUICK MASTER] Source uploaded to:", sourceUrl);
+    fs.mkdirSync(SOURCE_DIR, { recursive: true });
+    const sourcePath = path.join(SOURCE_DIR, `${Date.now()}-${file.originalname}`);
+    fs.writeFileSync(sourcePath, file.buffer);
+    console.log("[QUICK MASTER] Source written to:", sourcePath);
 
     console.log("[QUICK MASTER] Creating database record...");
     const master = await prisma.master.create({
@@ -109,14 +108,14 @@ export const createQuickMaster = async (req, res) => {
         sourceName: file.originalname,
         sourceMime: file.mimetype || "application/octet-stream",
         sourceSize: file.size,
-        sourceUrl,
+        sourceUrl: sourceKey,
         metadata: parsedMetadata,
       },
     });
     console.log("[QUICK MASTER] Database record created with ID:", master.id);
 
     console.log("[QUICK MASTER] Enqueuing mastering job...");
-    await enqueueMasteringJob(master.id, file.buffer);
+    await enqueueMasteringJob(master.id, sourcePath);
     console.log("[QUICK MASTER] Mastering job enqueued successfully");
 
     return res.status(201).json({ master });

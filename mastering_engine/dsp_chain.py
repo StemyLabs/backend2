@@ -24,6 +24,7 @@ import logging
 import os
 import struct
 import time
+import gc
 from pathlib import Path
 
 import numpy as np
@@ -121,6 +122,23 @@ TARGET_BITS     = 24              # output bit depth
 TARGET_LUFS     = -14.0          # integrated loudness target
 TARGET_TP_DB    = -1.0           # true-peak ceiling (dBTP)
 MAX_GAIN_DB     = 30.0           # safety: never boost by more than this
+MAX_MASTER_DURATION_SEC = int(os.environ.get("MAX_MASTER_DURATION_SEC", "900"))
+
+
+class MasteringError(Exception):
+    """Base error for mastering failures surfaced to the API."""
+
+
+class DurationTooLongError(MasteringError):
+    def __init__(self, duration_sec: float, max_sec: int):
+        self.duration_sec = duration_sec
+        self.max_sec = max_sec
+        mins = duration_sec / 60
+        max_mins = max_sec / 60
+        super().__init__(
+            f"Track is {mins:.1f} minutes long. Cloud mastering supports up to "
+            f"{max_mins:.0f} minutes per file to stay within server memory limits."
+        )
 
 
 
@@ -515,13 +533,18 @@ def master_audio(
     # ── 1. Load input audio ─────────────────────────────────────────────────
     with io.BytesIO(input_bytes) as buf:
         audio_raw, src_sr = sf.read(buf, dtype="float32", always_2d=True)
+    del input_bytes
 
     audio = _ensure_stereo(audio_raw)
+    del audio_raw
     input_dur = len(audio) / src_sr
     log.info(
         "Input: %d samples @ %d Hz, %.1f min (%.0f s)",
         len(audio), src_sr, input_dur / 60, input_dur,
     )
+
+    if input_dur > MAX_MASTER_DURATION_SEC:
+        raise DurationTooLongError(input_dur, MAX_MASTER_DURATION_SEC)
 
     # ── 2. Resample to 44 100 Hz if necessary ───────────────────────────────
     sr = src_sr
@@ -529,8 +552,9 @@ def master_audio(
         gcd = int(np.gcd(src_sr, TARGET_SR))
         up = TARGET_SR // gcd
         down = src_sr // gcd
-        audio = signal.resample_poly(audio, up, down, axis=0)
+        audio = signal.resample_poly(audio, up, down, axis=0).astype(np.float32)
         sr = TARGET_SR
+        gc.collect()
         log.info("Resampled %d → %d Hz (up=%d down=%d)", src_sr, TARGET_SR, up, down)
     log.info("Load+resample: %.1fs", time.perf_counter() - t0)
 
