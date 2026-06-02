@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import struct
 import time
 from pathlib import Path
@@ -29,6 +30,80 @@ import numpy as np
 import soundfile as sf
 import pyloudnorm as pyln
 import scipy.signal as signal
+from scipy.ndimage import maximum_filter1d
+
+log = logging.getLogger(__name__)
+
+
+def _python_smooth_gain_ar(gain_linear, attack_coeff, release_coeff):
+    smoothed = np.empty_like(gain_linear, dtype=np.float64)
+    state = 1.0
+    for i in range(len(gain_linear)):
+        coeff = attack_coeff if gain_linear[i] < state else release_coeff
+        state = state + (1.0 - coeff) * (gain_linear[i] - state)
+        smoothed[i] = state
+    return smoothed
+
+
+def _python_smooth_gain_release(gain, release_coeff):
+    smoothed = np.empty_like(gain, dtype=np.float64)
+    state = 1.0
+    for i in range(len(gain)):
+        if gain[i] < state:
+            state = gain[i]
+        else:
+            state = state + (1.0 - release_coeff) * (gain[i] - state)
+        smoothed[i] = state
+    return smoothed
+
+
+def _init_numba_smoothers():
+    """Load Numba JIT smoothers when allowed and supported on this CPU."""
+    if os.environ.get("STEMY_DISABLE_NUMBA", "").strip().lower() in {"1", "true", "yes"}:
+        log.info("DSP accelerator: numba disabled via STEMY_DISABLE_NUMBA")
+        return False, _python_smooth_gain_ar, _python_smooth_gain_release
+
+    try:
+        from numba import njit
+
+        @njit(cache=True)
+        def _smooth_gain_ar(gain_linear, attack_coeff, release_coeff):
+            n = len(gain_linear)
+            smoothed = np.empty(n, dtype=np.float64)
+            state = 1.0
+            for i in range(n):
+                coeff = attack_coeff if gain_linear[i] < state else release_coeff
+                state = state + (1.0 - coeff) * (gain_linear[i] - state)
+                smoothed[i] = state
+            return smoothed
+
+        @njit(cache=True)
+        def _smooth_gain_release(gain, release_coeff):
+            n = len(gain)
+            smoothed = np.empty(n, dtype=np.float64)
+            state = 1.0
+            for i in range(n):
+                if gain[i] < state:
+                    state = gain[i]
+                else:
+                    state = state + (1.0 - release_coeff) * (gain[i] - state)
+                smoothed[i] = state
+            return smoothed
+
+        # Compile once at import so bad CPUs fail early instead of mid-request.
+        _smooth_gain_ar(np.array([1.0, 0.9, 0.8], dtype=np.float64), 0.5, 0.9)
+        _smooth_gain_release(np.array([1.0, 0.9, 0.8], dtype=np.float64), 0.9)
+        log.info("DSP accelerator: numba enabled")
+        return True, _smooth_gain_ar, _smooth_gain_release
+    except ImportError:
+        log.warning(
+            "DSP accelerator: numba not installed — using CPU-safe fallback "
+            "(pip install -r requirements-speed.txt on capable hosts)"
+        )
+    except Exception as exc:
+        log.warning("DSP accelerator: numba unavailable on this CPU (%s) — using fallback", exc)
+
+    return False, _python_smooth_gain_ar, _python_smooth_gain_release
 
 # Pedalboard is intentionally not used: its C extension requires AVX
 # instructions which are unavailable on this CPU. All DSP is implemented
@@ -38,7 +113,7 @@ _PEDALBOARD_ERROR = "replaced with scipy/numpy (no AVX needed)"
 
 from genres import get_preset, DEFAULT_GENRE
 
-log = logging.getLogger(__name__)
+_HAS_NUMBA, _smooth_gain_ar, _smooth_gain_release = _init_numba_smoothers()
 
 # ─────────────────────────── constants ──────────────────────────────────────
 TARGET_SR       = 44_100          # output sample rate (Hz)
@@ -275,7 +350,64 @@ def _soft_clip_saturation(audio: np.ndarray, drive: float) -> np.ndarray:
     return out.astype(np.float32)
 
 
-# ─────────────────────────── compressor (pure numpy) ─────────────────────────
+# ─────────────────────────── EQ helpers (single-pass chain) ──────────────────
+
+def _biquad_coeffs(freq_hz: float, gain_db: float, sr: int, q: float = 0.707, shelf: str | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Return (b, a) for peaking or shelf biquad."""
+    w0 = 2 * np.pi * freq_hz / sr
+    A = 10 ** (gain_db / 40)
+    alpha = np.sin(w0) / (2 * q)
+    cos_w0 = np.cos(w0)
+
+    if shelf == "low":
+        b0 = A * ((A + 1) - (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha)
+        b1 = 2 * A * ((A - 1) - (A + 1) * cos_w0)
+        b2 = A * ((A + 1) - (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha)
+        a0 = (A + 1) + (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha
+        a1 = -2 * ((A - 1) + (A + 1) * cos_w0)
+        a2 = (A + 1) + (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha
+    elif shelf == "high":
+        b0 = A * ((A + 1) + (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha)
+        b1 = -2 * A * ((A - 1) + (A + 1) * cos_w0)
+        b2 = A * ((A + 1) + (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha)
+        a0 = (A + 1) - (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha
+        a1 = 2 * ((A - 1) - (A + 1) * cos_w0)
+        a2 = (A + 1) - (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha
+    else:
+        b0 = 1 + alpha * A
+        b1 = -2 * cos_w0
+        b2 = 1 - alpha * A
+        a0 = 1 + alpha / A
+        a1 = -2 * cos_w0
+        a2 = 1 - alpha / A
+
+    return np.array([b0 / a0, b1 / a0, b2 / a0], dtype=np.float64), np.array([1.0, a1 / a0, a2 / a0], dtype=np.float64)
+
+
+def _build_eq_sos(p: dict, sr: int) -> np.ndarray:
+    """Combine HPF + 4-band EQ into one SOS matrix for a single pass."""
+    sections = [signal.butter(4, p["hpf_hz"], btype="high", fs=sr, output="sos")]
+
+    for key, shelf in (
+        ("low_shelf", "low"),
+        ("mid_dip", None),
+        ("presence", None),
+        ("air_shelf", "high"),
+    ):
+        band = p[key]
+        q = band.get("q", 0.707)
+        b, a = _biquad_coeffs(band["freq_hz"], band["gain_db"], sr, q=q, shelf=shelf)
+        sections.append(signal.tf2sos(b, a))
+
+    return np.concatenate(sections)
+
+
+def _apply_eq_chain(audio: np.ndarray, p: dict, sr: int) -> np.ndarray:
+    sos = _build_eq_sos(p, sr)
+    return signal.sosfilt(sos, audio, axis=0).astype(np.float32)
+
+
+# ─────────────────────────── compressor ─────────────────────────────────────
 
 def _compressor(audio: np.ndarray, sr: int, cfg: dict) -> np.ndarray:
     """
@@ -307,22 +439,16 @@ def _compressor(audio: np.ndarray, sr: int, cfg: dict) -> np.ndarray:
     else:
         gain_db = np.where(overlap > 0, overlap * (1 / ratio - 1), 0.0)
 
-    gain_linear = _db_to_lin(gain_db)
+    gain_linear = _db_to_lin(gain_db).astype(np.float64)
 
-    # Attack/release smoothing (exponential moving average)
     attack_coeff = np.exp(-1.0 / (sr * attack_ms / 1000))
     release_coeff = np.exp(-1.0 / (sr * release_ms / 1000))
-    smoothed = np.zeros_like(gain_linear)
-    state = 1.0
-    for i in range(len(gain_linear)):
-        coeff = attack_coeff if gain_linear[i] < state else release_coeff
-        state = state + (1 - coeff) * (gain_linear[i] - state)
-        smoothed[i] = state
+    smoothed = _smooth_gain_ar(gain_linear, attack_coeff, release_coeff).astype(np.float32)
 
     return (audio.T * smoothed).T.astype(np.float32)
 
 
-# ─────────────────────────── brickwall limiter (pure numpy) ──────────────────
+# ─────────────────────────── brickwall limiter ────────────────────────────────
 
 def _limiter(audio: np.ndarray, sr: int, threshold_db: float, release_ms: float) -> np.ndarray:
     """
@@ -331,28 +457,14 @@ def _limiter(audio: np.ndarray, sr: int, threshold_db: float, release_ms: float)
     lookahead_samples = int(sr * 0.001)  # 1 ms lookahead
     threshold = _db_to_lin(threshold_db)
 
-    # Pad for lookahead
-    padded = np.pad(audio, ((lookahead_samples, 0), (0, 0)), mode="edge")
+    peak = np.max(np.abs(audio), axis=1).astype(np.float64)
+    padded = np.pad(peak, (lookahead_samples, 0), mode="edge")
+    env = maximum_filter1d(padded, size=lookahead_samples + 1, mode="nearest")[: len(peak)]
 
-    # Envelope follower with lookahead
-    env = np.zeros(len(audio))
-    for i in range(len(audio)):
-        window = padded[i:i + lookahead_samples + 1]
-        env[i] = float(np.max(np.abs(window)))
+    gain = np.where(env > threshold, threshold / (env + 1e-12), 1.0).astype(np.float64)
 
-    # Gain computer
-    gain = np.where(env > threshold, threshold / (env + 1e-12), 1.0)
-
-    # Release smoothing
     release_coeff = np.exp(-1.0 / (sr * release_ms / 1000))
-    smoothed = np.zeros_like(gain)
-    state = 1.0
-    for i in range(len(gain)):
-        if gain[i] < state:
-            state = gain[i]
-        else:
-            state = state + (1 - release_coeff) * (gain[i] - state)
-        smoothed[i] = state
+    smoothed = _smooth_gain_release(gain, release_coeff).astype(np.float32)
 
     return (audio.T * smoothed).T.astype(np.float32)
 
@@ -406,7 +518,10 @@ def master_audio(
 
     audio = _ensure_stereo(audio_raw)
     input_dur = len(audio) / src_sr
-    log.info("Input: %d samples @ %d Hz, %.2f s", len(audio), src_sr, input_dur)
+    log.info(
+        "Input: %d samples @ %d Hz, %.1f min (%.0f s)",
+        len(audio), src_sr, input_dur / 60, input_dur,
+    )
 
     # ── 2. Resample to 44 100 Hz if necessary ───────────────────────────────
     sr = src_sr
@@ -419,68 +534,12 @@ def master_audio(
         log.info("Resampled %d → %d Hz (up=%d down=%d)", src_sr, TARGET_SR, up, down)
     log.info("Load+resample: %.1fs", time.perf_counter() - t0)
 
-    # ── 3. Build EQ + compressor chain (pure scipy/numpy) ────────────────────
+    # ── 3. EQ + compressor chain ─────────────────────────────────────────────
     t1 = time.perf_counter()
     p = preset
     comp_cfg = p["comp"]
 
-    # ── 3a. High-pass filter ────────────────────────────────────────────────
-    hp_sos = signal.butter(4, p["hpf_hz"], btype="high", fs=sr, output="sos")
-    audio = signal.sosfilt(hp_sos, audio, axis=0)
-
-    # ── 3b. Low-shelf filter ────────────────────────────────────────────────
-    w0 = 2 * np.pi * p["low_shelf"]["freq_hz"] / sr
-    A = 10 ** (p["low_shelf"]["gain_db"] / 40)
-    alpha = np.sin(w0) / (2 * 0.707)
-    cos_w0 = np.cos(w0)
-    b0 = A * ((A + 1) - (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha)
-    b1 = 2 * A * ((A - 1) - (A + 1) * cos_w0)
-    b2 = A * ((A + 1) - (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha)
-    a0 = (A + 1) + (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha
-    a1 = -2 * ((A - 1) + (A + 1) * cos_w0)
-    a2 = (A + 1) + (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha
-    audio = signal.lfilter([b0/a0, b1/a0, b2/a0], [1.0, a1/a0, a2/a0], audio, axis=0)
-
-    # ── 3c. Mid-dip peaking filter ──────────────────────────────────────────
-    w0 = 2 * np.pi * p["mid_dip"]["freq_hz"] / sr
-    A = 10 ** (p["mid_dip"]["gain_db"] / 40)
-    alpha = np.sin(w0) / (2 * p["mid_dip"]["q"])
-    cos_w0 = np.cos(w0)
-    b0 = 1 + alpha * A
-    b1 = -2 * cos_w0
-    b2 = 1 - alpha * A
-    a0 = 1 + alpha / A
-    a1 = -2 * cos_w0
-    a2 = 1 - alpha / A
-    audio = signal.lfilter([b0/a0, b1/a0, b2/a0], [1.0, a1/a0, a2/a0], audio, axis=0)
-
-    # ── 3d. Presence peaking filter ─────────────────────────────────────────
-    w0 = 2 * np.pi * p["presence"]["freq_hz"] / sr
-    A = 10 ** (p["presence"]["gain_db"] / 40)
-    alpha = np.sin(w0) / (2 * p["presence"]["q"])
-    cos_w0 = np.cos(w0)
-    b0 = 1 + alpha * A
-    b1 = -2 * cos_w0
-    b2 = 1 - alpha * A
-    a0 = 1 + alpha / A
-    a1 = -2 * cos_w0
-    a2 = 1 - alpha / A
-    audio = signal.lfilter([b0/a0, b1/a0, b2/a0], [1.0, a1/a0, a2/a0], audio, axis=0)
-
-    # ── 3e. Air shelf (high-shelf) filter ───────────────────────────────────
-    w0 = 2 * np.pi * p["air_shelf"]["freq_hz"] / sr
-    A = 10 ** (p["air_shelf"]["gain_db"] / 40)
-    alpha = np.sin(w0) / (2 * 0.707)
-    cos_w0 = np.cos(w0)
-    b0 = A * ((A + 1) + (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha)
-    b1 = -2 * A * ((A - 1) + (A + 1) * cos_w0)
-    b2 = A * ((A + 1) + (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha)
-    a0 = (A + 1) - (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha
-    a1 = 2 * ((A - 1) - (A + 1) * cos_w0)
-    a2 = (A + 1) - (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha
-    audio = signal.lfilter([b0/a0, b1/a0, b2/a0], [1.0, a1/a0, a2/a0], audio, axis=0)
-
-    # ── 3f. Compressor (pure numpy) ─────────────────────────────────────────
+    audio = _apply_eq_chain(audio, p, sr)
     audio = _compressor(audio, sr, comp_cfg)
     audio = audio * _db_to_lin(comp_cfg.get("makeup_db", 0.0))
     log.info("EQ+Compressor: %.1fs", time.perf_counter() - t1)

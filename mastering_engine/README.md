@@ -172,16 +172,51 @@ When the DSP engineer modifies preset values, the API interface remains unchange
 
 ## Requirements
 
-```
+```bash
+# CPU-safe base stack (Render, older x86 hosts)
 pip install -r requirements.txt
+
+# Optional speed boost on modern CPUs (local dev, Render Standard+)
+pip install -r requirements-speed.txt
 ```
 
 Key dependencies:
-- `pedalboard` - Audio processing plugins
-- `pyloudnorm` - LUFS measurement (BS.1770-3)
-- `soundfile` - Audio file I/O
-- `flask` - REST API server
-- `numpy` - Signal processing
+- `numpy` + `scipy` — core DSP (no AVX required)
+- `pyloudnorm` — LUFS measurement (BS.1770-3)
+- `soundfile` — audio file I/O
+- `flask` — REST API server
+- `numba` — optional JIT for compressor/limiter (see Render notes below)
+
+**Not used:** `pedalboard` — its pre-built binaries require AVX and crash on some Render CPUs.
+
+## Deploying on Render.com
+
+Render Standard plan CPUs are usually fine for this engine. The old AVX problem was specifically with **pre-compiled** packages like Pedalboard, which ship AVX-only machine code.
+
+| Package | Render-safe? | Notes |
+|---------|--------------|-------|
+| numpy / scipy / soundfile | Yes | Standard PyPI wheels, baseline x86-64 |
+| numba | Usually yes | JIT-compiles **on your Render CPU** at runtime |
+| pedalboard | No | Avoid — hard AVX requirement |
+
+**Recommended Render build command:**
+
+```bash
+pip install -r requirements.txt && pip install -r requirements-speed.txt
+```
+
+If numba fails to import or compile on your instance, the engine automatically falls back to a slower CPU-safe path. You can also force the fallback:
+
+```bash
+STEMY_DISABLE_NUMBA=1
+```
+
+**What you get without numba:** vectorized limiter + single-pass EQ still run (much faster than the original code). Only the compressor envelope loop stays in plain Python, which is slow on 20–30 minute files.
+
+Check startup logs for one of:
+- `DSP accelerator: numba enabled` — full speed
+- `DSP accelerator: numba disabled via STEMY_DISABLE_NUMBA` — forced safe mode
+- `DSP accelerator: numba not installed` — install `requirements-speed.txt` when ready
 
 ## Development
 
