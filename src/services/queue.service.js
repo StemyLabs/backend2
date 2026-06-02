@@ -149,9 +149,33 @@ if (redisConnection) {
         downloadCache.set(masterId, tmpPath);
 
         // Mark complete immediately — user can download NOW
+        const completedAt = new Date();
+        const masterMeta =
+          master.metadata && typeof master.metadata === "object"
+            ? master.metadata
+            : {};
+        const startedAt = masterMeta.processingStartedAt
+          ? new Date(masterMeta.processingStartedAt)
+          : null;
+        const processingTimeMs = startedAt
+          ? completedAt.getTime() - startedAt.getTime()
+          : null;
+
         await prisma.master.update({
           where: { id: masterId },
-          data: { status: "COMPLETE", completedAt: new Date(), lufs, dbtp, dr, duration },
+          data: {
+            status: "COMPLETE",
+            completedAt,
+            lufs,
+            dbtp,
+            dr,
+            duration,
+            metadata: {
+              ...masterMeta,
+              processingTimeMs,
+              engineTimeMs: parseInt(pyTime || "0", 10) || null,
+            },
+          },
         });
         marks.push(T("db_update"));
 
@@ -195,7 +219,7 @@ if (redisConnection) {
         console.log(`  Write local    ${fmt(marks[2], marks[3])}  (${outMB} MB)`);
         console.log(`  DB update      ${fmt(marks[3], marks[4])}`);
         console.log(`  ─────────────────────────────`);
-        console.log(`  USER READY     ${fmt(marks[0], marks[4])}`);
+        console.log(`  USER READY     ${fmt(marks[0], marks[4])}${processingTimeMs != null ? `  (total=${(processingTimeMs / 1000).toFixed(1)}s)` : ""}`);
         console.log(`  ─────────────────────────────`);
         console.log(`  R2 upload runs in background`);
         console.log(`═══════════════════════════════\n`);

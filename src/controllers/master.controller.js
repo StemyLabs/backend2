@@ -30,6 +30,8 @@ const ALLOWED_MIME = new Set([
 ]);
 
 export const createQuickMaster = async (req, res) => {
+  const processingStartedAt = new Date().toISOString();
+
   try {
     const hasValidPlan = await checkUserPlan(req.userId);
     if (!hasValidPlan) {
@@ -74,7 +76,8 @@ export const createQuickMaster = async (req, res) => {
     }
 
     // Parse metadata and handle artwork
-    let parsedMetadata = metadataRaw ? JSON.parse(metadataRaw) : null;
+    let parsedMetadata = metadataRaw ? JSON.parse(metadataRaw) : {};
+    parsedMetadata.processingStartedAt = processingStartedAt;
 
     // Upload artwork if provided
     if (artwork) {
