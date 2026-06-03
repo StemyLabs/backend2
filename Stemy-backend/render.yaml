@@ -11,7 +11,8 @@ services:
   - type: web
     name: stemy-mastering-engine
     runtime: python
-    plan: starter
+    # Standard = 2 GB RAM (recommended for long MP3/FLAC under 100 MB)
+    plan: standard
     buildCommand: pip install -r mastering_engine/requirements.txt
     startCommand: gunicorn -c gunicorn.conf.py app:app --chdir mastering_engine
     envVars:
@@ -19,6 +20,5 @@ services:
         value: 3.12.8
       - key: WEB_CONCURRENCY
         value: "1"
-      # ~8 min max on 512MB instances; raise with RAM (e.g. 900 on 2GB)
-      - key: STEMY_MAX_AUDIO_DURATION_SEC
-        value: "480"
+      - key: STEMY_MAX_UPLOAD_BYTES
+        value: "104857600"

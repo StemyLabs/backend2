@@ -210,19 +210,26 @@ Key dependencies:
 
 Point your Node API’s `PYTHON_ENGINE_URL` at this service’s public URL (e.g. `https://stemy-mastering-engine.onrender.com`).
 
-### 502 on larger files (e.g. 27 MB MP3)
+### Upload limit
 
-A small file (2 MB) can work while a larger one returns Render’s **502 Bad Gateway** page. That usually means the worker **ran out of memory (OOM)** or was killed mid-request—not a “bad file format.”
+Maximum upload size is **100 MB** (file bytes on disk). **Track length is not limited** — a 27 MB MP3 can be 30+ minutes.
 
-Compressed files (MP3/FLAC) are small on disk but decode to **many minutes** of PCM. A 27 MB MP3 can be ~10+ minutes; float32 mastering needs hundreds of MB to over 1 GB RAM, which exceeds Render’s **512 MB** starter instance.
+### Render Standard (2 GB RAM) — recommended
 
-**Mitigations:**
+| Setting | Value |
+|---------|--------|
+| Instance | **Standard** (2 GB RAM) |
+| `PYTHON_VERSION` | `3.12.8` |
+| `WEB_CONCURRENCY` | `1` (do not run 2+ workers — each job decodes full PCM) |
+| `STEMY_MAX_UPLOAD_BYTES` | `104857600` (100 MB) |
+| Start command | `gunicorn -c gunicorn.conf.py app:app --chdir mastering_engine` |
+| Remove | `STEMY_MAX_AUDIO_DURATION_SEC` if still set in the dashboard |
 
-| Approach | Action |
-|----------|--------|
-| Clear limit (default) | `STEMY_MAX_AUDIO_DURATION_SEC=480` (8 min) — API returns **413** with a clear message instead of 502 |
-| More headroom | Upgrade Render plan (e.g. **2 GB RAM**) and set `STEMY_MAX_AUDIO_DURATION_SEC=900` |
-| Architecture | Quick Master already uses async jobs on the Node API; keep long work off browser-facing sync URLs |
+Gunicorn **timeout** defaults to **1200 s** (20 min) so long masters are not cut off early.
+
+### 502 on large / long compressed files
+
+Still possible if RAM is exhausted (e.g. **Starter 512 MB** with a 30-minute MP3). **Standard 2 GB** should handle typical files under 100 MB. If 502 persists, check logs for OOM and keep `WEB_CONCURRENCY=1`.
 
 ## Development
 

@@ -47,8 +47,10 @@ log = logging.getLogger("stemy.api")
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})   # allow all origins (update in prod)
 
-# Max upload size: 100 MB (server-side limit; frontend restricts to 20 MB)
-app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
+# Max upload size: 100 MB (matches Node API; no duration limit)
+app.config["MAX_CONTENT_LENGTH"] = int(
+    os.environ.get("STEMY_MAX_UPLOAD_BYTES", str(100 * 1024 * 1024))
+)
 
 ALLOWED_EXTENSIONS = {
     ".wav", ".mp3", ".flac", ".aiff", ".aif",

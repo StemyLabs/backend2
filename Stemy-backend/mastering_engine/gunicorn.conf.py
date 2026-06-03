@@ -9,14 +9,14 @@ sys.path.insert(0, os.path.join(os.getcwd(), 'mastering_engine'))
 port = os.environ.get("PORT")
 bind = f"0.0.0.0:{port}" if port else "0.0.0.0:10000"
 
-# Workers - use 1 for free tier to save memory
-workers = 1
+# One worker — Render Standard (2 GB): avoids two concurrent masters OOMing RAM
+workers = int(os.environ.get("WEB_CONCURRENCY", "1"))
 
 # Worker class
 worker_class = "sync"
 
-# Timeout - 10 minutes for large audio files
-timeout = 600
+# Long tracks (30+ min) can take several minutes to process
+timeout = int(os.environ.get("GUNICORN_TIMEOUT", "1200"))
 
 # Graceful timeout for shutdown
 graceful_timeout = 30
@@ -33,7 +33,5 @@ accesslog = "-"
 errorlog = "-"
 loglevel = "info"
 
-# Disable preload to save memory
+# Disable preload to save memory on 2 GB instances
 preload_app = False
-
-# Use default temp dir — /dev/shm shares RAM with the worker on small instances

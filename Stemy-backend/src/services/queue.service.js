@@ -64,8 +64,8 @@ if (redisConnection) {
         }
         marks.push(T("get_src"));
 
-        if (srcBuf.byteLength > 150 * 1024 * 1024)
-          throw new Error("File too large. Maximum size is 150MB");
+        if (srcBuf.byteLength > 100 * 1024 * 1024)
+          throw new Error("File too large. Maximum size is 100MB");
 
         // ── Download artwork from R2 if present ─────────────────────────
         let artBuf = null;

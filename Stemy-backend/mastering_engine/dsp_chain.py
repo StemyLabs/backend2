@@ -62,16 +62,9 @@ TARGET_LUFS     = -14.0          # integrated loudness target
 TARGET_TP_DB    = -1.0           # true-peak ceiling (dBTP)
 MAX_GAIN_DB     = 30.0           # safety: never boost by more than this
 
-# Cloud instances (e.g. Render starter ≈512MB) cannot hold full float32 PCM for
-# very long tracks. Reject before decode when possible.
-MAX_DURATION_SEC = int(os.environ.get("STEMY_MAX_AUDIO_DURATION_SEC", "480"))
-# Rough float32 stereo @ 44.1 kHz + pedalboard copies (~4×)
-_ESTIMATED_BYTES_PER_SEC = 44100 * 2 * 4 * 4
-MAX_DECODE_BYTES = int(
-    os.environ.get(
-        "STEMY_MAX_DECODE_BYTES",
-        str(MAX_DURATION_SEC * _ESTIMATED_BYTES_PER_SEC),
-    )
+# Upload cap only (matches Node API + Flask MAX_CONTENT_LENGTH). No duration limit.
+MAX_UPLOAD_BYTES = int(
+    os.environ.get("STEMY_MAX_UPLOAD_BYTES", str(100 * 1024 * 1024))
 )
 
 
@@ -110,29 +103,12 @@ def _probe_audio(input_bytes: bytes) -> tuple[float, int, int]:
     return frames / sr, sr, ch
 
 
-def _check_audio_limits(
-    input_bytes: bytes,
-    duration_sec: float,
-    sample_rate: int,
-    channels: int,
-) -> None:
+def _check_upload_size(input_bytes: bytes) -> None:
     file_mb = len(input_bytes) / (1024 * 1024)
-    if duration_sec > MAX_DURATION_SEC:
+    max_mb = MAX_UPLOAD_BYTES / (1024 * 1024)
+    if len(input_bytes) > MAX_UPLOAD_BYTES:
         raise ValueError(
-            f"Track is {duration_sec / 60:.1f} minutes long; "
-            f"maximum allowed is {MAX_DURATION_SEC / 60:.0f} minutes "
-            f"({MAX_DURATION_SEC:.0f} seconds). "
-            f"File size on disk ({file_mb:.1f} MB) does not reflect length for "
-            f"compressed formats (MP3/FLAC)."
-        )
-    # Estimate decoded RAM at target rate (resampling can grow short files slightly)
-    est_samples = duration_sec * max(sample_rate, TARGET_SR)
-    est_bytes = est_samples * min(channels, 2) * 4 * 4
-    if est_bytes > MAX_DECODE_BYTES:
-        raise ValueError(
-            f"Track is too large to process on this server "
-            f"(estimated {est_bytes / (1024 * 1024):.0f} MB RAM needed). "
-            f"Try a shorter clip or upgrade the instance memory."
+            f"File is {file_mb:.1f} MB; maximum upload size is {max_mb:.0f} MB."
         )
 
 
@@ -387,8 +363,8 @@ def master_audio(
     log.info("Mastering — genre=%s target_lufs=%.1f target_tp=%.1f",
              genre, target_lufs, target_tp_db)
 
+    _check_upload_size(input_bytes)
     duration_sec, src_sr_probe, channels = _probe_audio(input_bytes)
-    _check_audio_limits(input_bytes, duration_sec, src_sr_probe, channels)
     log.info(
         "Input probe: %.2f s, %d Hz, %d ch, %.1f MB file",
         duration_sec,
