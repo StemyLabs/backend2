@@ -72,7 +72,7 @@ app.use(
 );
 
 app.get("/", (req, res) => {
-  res.json({ message: "Stemy API is running...", timestamp: Date.now() });
+  res.json({ message: "Stemy API is running Fine...", timestamp: Date.now() });
 });
 
 app.get("/health", (req, res) => {
