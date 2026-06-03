@@ -19,3 +19,6 @@ services:
         value: 3.12.8
       - key: WEB_CONCURRENCY
         value: "1"
+      # ~8 min max on 512MB instances; raise with RAM (e.g. 900 on 2GB)
+      - key: STEMY_MAX_AUDIO_DURATION_SEC
+        value: "480"

@@ -210,6 +210,20 @@ Key dependencies:
 
 Point your Node API’s `PYTHON_ENGINE_URL` at this service’s public URL (e.g. `https://stemy-mastering-engine.onrender.com`).
 
+### 502 on larger files (e.g. 27 MB MP3)
+
+A small file (2 MB) can work while a larger one returns Render’s **502 Bad Gateway** page. That usually means the worker **ran out of memory (OOM)** or was killed mid-request—not a “bad file format.”
+
+Compressed files (MP3/FLAC) are small on disk but decode to **many minutes** of PCM. A 27 MB MP3 can be ~10+ minutes; float32 mastering needs hundreds of MB to over 1 GB RAM, which exceeds Render’s **512 MB** starter instance.
+
+**Mitigations:**
+
+| Approach | Action |
+|----------|--------|
+| Clear limit (default) | `STEMY_MAX_AUDIO_DURATION_SEC=480` (8 min) — API returns **413** with a clear message instead of 502 |
+| More headroom | Upgrade Render plan (e.g. **2 GB RAM**) and set `STEMY_MAX_AUDIO_DURATION_SEC=900` |
+| Architecture | Quick Master already uses async jobs on the Node API; keep long work off browser-facing sync URLs |
+
 ## Development
 
 ```bash

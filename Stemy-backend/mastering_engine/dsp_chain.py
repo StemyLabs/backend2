@@ -19,8 +19,10 @@ Output spec:
 
 from __future__ import annotations
 
+import gc
 import io
 import logging
+import os
 import struct
 import time
 import warnings
@@ -60,6 +62,18 @@ TARGET_LUFS     = -14.0          # integrated loudness target
 TARGET_TP_DB    = -1.0           # true-peak ceiling (dBTP)
 MAX_GAIN_DB     = 30.0           # safety: never boost by more than this
 
+# Cloud instances (e.g. Render starter ≈512MB) cannot hold full float32 PCM for
+# very long tracks. Reject before decode when possible.
+MAX_DURATION_SEC = int(os.environ.get("STEMY_MAX_AUDIO_DURATION_SEC", "480"))
+# Rough float32 stereo @ 44.1 kHz + pedalboard copies (~4×)
+_ESTIMATED_BYTES_PER_SEC = 44100 * 2 * 4 * 4
+MAX_DECODE_BYTES = int(
+    os.environ.get(
+        "STEMY_MAX_DECODE_BYTES",
+        str(MAX_DURATION_SEC * _ESTIMATED_BYTES_PER_SEC),
+    )
+)
+
 
 
 
@@ -82,6 +96,44 @@ def _lin_to_db(lin: float) -> float:
     if lin <= 0:
         return -120.0
     return 20.0 * np.log10(lin)
+
+
+def _probe_audio(input_bytes: bytes) -> tuple[float, int, int]:
+    """Return (duration_sec, sample_rate, channels) without decoding PCM."""
+    with io.BytesIO(input_bytes) as buf:
+        with sf.SoundFile(buf) as f:
+            frames = len(f)
+            sr = int(f.samplerate)
+            ch = int(f.channels)
+    if sr <= 0 or frames <= 0:
+        raise ValueError("Could not read audio length from file.")
+    return frames / sr, sr, ch
+
+
+def _check_audio_limits(
+    input_bytes: bytes,
+    duration_sec: float,
+    sample_rate: int,
+    channels: int,
+) -> None:
+    file_mb = len(input_bytes) / (1024 * 1024)
+    if duration_sec > MAX_DURATION_SEC:
+        raise ValueError(
+            f"Track is {duration_sec / 60:.1f} minutes long; "
+            f"maximum allowed is {MAX_DURATION_SEC / 60:.0f} minutes "
+            f"({MAX_DURATION_SEC:.0f} seconds). "
+            f"File size on disk ({file_mb:.1f} MB) does not reflect length for "
+            f"compressed formats (MP3/FLAC)."
+        )
+    # Estimate decoded RAM at target rate (resampling can grow short files slightly)
+    est_samples = duration_sec * max(sample_rate, TARGET_SR)
+    est_bytes = est_samples * min(channels, 2) * 4 * 4
+    if est_bytes > MAX_DECODE_BYTES:
+        raise ValueError(
+            f"Track is too large to process on this server "
+            f"(estimated {est_bytes / (1024 * 1024):.0f} MB RAM needed). "
+            f"Try a shorter clip or upgrade the instance memory."
+        )
 
 
 def _ensure_stereo(audio: np.ndarray) -> np.ndarray:
@@ -335,11 +387,22 @@ def master_audio(
     log.info("Mastering — genre=%s target_lufs=%.1f target_tp=%.1f",
              genre, target_lufs, target_tp_db)
 
+    duration_sec, src_sr_probe, channels = _probe_audio(input_bytes)
+    _check_audio_limits(input_bytes, duration_sec, src_sr_probe, channels)
+    log.info(
+        "Input probe: %.2f s, %d Hz, %d ch, %.1f MB file",
+        duration_sec,
+        src_sr_probe,
+        channels,
+        len(input_bytes) / (1024 * 1024),
+    )
+
     # ── 1. Load input audio ─────────────────────────────────────────────────
     with io.BytesIO(input_bytes) as buf:
         audio_raw, src_sr = sf.read(buf, dtype="float32", always_2d=True)
 
     audio = _ensure_stereo(audio_raw)
+    del audio_raw
     input_dur = len(audio) / src_sr
     log.info("Input: %d samples @ %d Hz, %.2f s", len(audio), src_sr, input_dur)
 
@@ -371,6 +434,7 @@ def master_audio(
     audio_pb = audio.T
     audio_pb = board.process(audio_pb, sample_rate=sr)
     audio = audio_pb.T
+    del audio_pb
     audio = audio * _db_to_lin(comp_cfg.get("makeup_db", 0.0))
     log.info("EQ+Compressor: %.1fs", time.perf_counter() - t1)
 
@@ -430,6 +494,9 @@ def master_audio(
 
     # ── 10. Metadata ─────────────────────────────────────────────────────────
     wav_bytes = _embed_riff_metadata(wav_bytes, metadata, artwork_bytes)
+
+    del audio
+    gc.collect()
 
     total = time.perf_counter() - t0
     log.info("TOTAL: %.1fs (rtf=%.1fx)", total, total / input_dur)

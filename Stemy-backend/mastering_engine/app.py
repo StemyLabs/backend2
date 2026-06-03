@@ -209,6 +209,9 @@ def master():
             artwork_bytes=art_bytes,
         )
         log.info("[QUICK MASTER] Audio processing completed. Output size: %d bytes", len(wav_bytes))
+    except ValueError as exc:
+        log.warning("[QUICK MASTER] Rejected %s: %s", f.filename, exc)
+        abort(413, description=str(exc))
     except Exception as exc:
         log.exception("[QUICK MASTER] Mastering failed for %s: %s", f.filename, exc)
         abort(
@@ -257,6 +260,7 @@ def master():
 # ─── JSON error handlers ──────────────────────────────────────────────────────
 
 @app.errorhandler(400)
+@app.errorhandler(413)
 @app.errorhandler(415)
 @app.errorhandler(500)
 def json_error(exc):

@@ -36,5 +36,4 @@ loglevel = "info"
 # Disable preload to save memory
 preload_app = False
 
-# Worker retries for stability
-worker_tmp_dir = "/dev/shm"
+# Use default temp dir — /dev/shm shares RAM with the worker on small instances
