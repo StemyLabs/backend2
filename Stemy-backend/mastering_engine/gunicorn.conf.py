@@ -2,8 +2,10 @@
 import os
 import sys
 
-# Add mastering_engine to path so we can import app from repo root
-sys.path.insert(0, os.path.join(os.getcwd(), 'mastering_engine'))
+# This file lives in mastering_engine/ — keep imports working from any cwd
+_engine_dir = os.path.dirname(os.path.abspath(__file__))
+if _engine_dir not in sys.path:
+    sys.path.insert(0, _engine_dir)
 
 # Bind address - Render sets PORT env var
 port = os.environ.get("PORT")

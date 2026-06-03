@@ -194,14 +194,15 @@ Key dependencies:
 1. **Pin Python 3.12** — Render does **not** read `runtime.txt`. Use either:
    - Add `.python-version` at the service root (this repo has `3.12` in `Stemy-backend/.python-version`), or
    - In the Render dashboard → Environment → set `PYTHON_VERSION` = `3.12.8` (full patch version required for env var).
-2. **Start command** — use the config file (1 worker, long timeout), not `-w 2`:
+2. **Start command** — if Render **Root Directory** is `Stemy-backend`:
    ```bash
-   gunicorn -c gunicorn.conf.py app:app --chdir mastering_engine
+   cd mastering_engine && gunicorn -c gunicorn.conf.py app:app
    ```
-   If your Render **Root Directory** is `mastering_engine`, use:
+   If Root Directory is `mastering_engine`, use:
    ```bash
    gunicorn -c gunicorn.conf.py app:app
    ```
+   Do **not** use `--chdir mastering_engine` with `-c gunicorn.conf.py` from the repo root — Gunicorn looks for the config before changing directory and will fail.
 3. **Build command:**
    ```bash
    pip install -r mastering_engine/requirements.txt
@@ -222,7 +223,7 @@ Maximum upload size is **100 MB** (file bytes on disk). **Track length is not li
 | `PYTHON_VERSION` | `3.12.8` |
 | `WEB_CONCURRENCY` | `1` (do not run 2+ workers — each job decodes full PCM) |
 | `STEMY_MAX_UPLOAD_BYTES` | `104857600` (100 MB) |
-| Start command | `gunicorn -c gunicorn.conf.py app:app --chdir mastering_engine` |
+| Start command | `cd mastering_engine && gunicorn -c gunicorn.conf.py app:app` |
 | Remove | `STEMY_MAX_AUDIO_DURATION_SEC` if still set in the dashboard |
 
 Gunicorn **timeout** defaults to **1200 s** (20 min) so long masters are not cut off early.
