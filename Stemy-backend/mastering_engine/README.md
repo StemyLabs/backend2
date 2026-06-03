@@ -183,14 +183,41 @@ Key dependencies:
 - `flask` - REST API server
 - `numpy` - Signal processing
 
+## Deploy on Render (Python Web Service)
+
+**Symptom:** Gunicorn workers restart in a loop with `Worker (pid:…) was sent SIGILL!`
+
+**Cause:** Render’s default Python is **3.14** (for services created after 2026-02-11). The `pedalboard` native extension is not stable on 3.14 in this environment; workers die as soon as `app.py` imports `dsp_chain` → `pedalboard`.
+
+**Fix (do all of these):**
+
+1. **Pin Python 3.12** — Render does **not** read `runtime.txt`. Use either:
+   - Add `.python-version` at the service root (this repo has `3.12` in `Stemy-backend/.python-version`), or
+   - In the Render dashboard → Environment → set `PYTHON_VERSION` = `3.12.8` (full patch version required for env var).
+2. **Start command** — use the config file (1 worker, long timeout), not `-w 2`:
+   ```bash
+   gunicorn -c gunicorn.conf.py app:app --chdir mastering_engine
+   ```
+   If your Render **Root Directory** is `mastering_engine`, use:
+   ```bash
+   gunicorn -c gunicorn.conf.py app:app
+   ```
+3. **Build command:**
+   ```bash
+   pip install -r mastering_engine/requirements.txt
+   ```
+4. Redeploy and confirm logs show Python **3.12.x** (not 3.14) and no SIGILL lines.
+
+Point your Node API’s `PYTHON_ENGINE_URL` at this service’s public URL (e.g. `https://stemy-mastering-engine.onrender.com`).
+
 ## Development
 
 ```bash
 # Run local server
 python app.py
 
-# Run production server
-gunicorn -w 2 -b 0.0.0.0:5050 app:app
+# Run production server (local)
+gunicorn -c gunicorn.conf.py app:app
 
 # Test a single file
 python dsp_chain.py input.wav pop output.wav

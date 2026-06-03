@@ -1,0 +1,21 @@
+# Optional Render Blueprint — Python mastering engine only.
+# For the Node API, create a separate Web Service (runtime: Node).
+#
+# Dashboard equivalent:
+#   Root Directory: server/Stemy-backend  (or repo root if monorepo)
+#   Runtime: Python 3
+#   Build:  pip install -r mastering_engine/requirements.txt
+#   Start:  gunicorn -c mastering_engine/gunicorn.conf.py app:app --chdir mastering_engine
+
+services:
+  - type: web
+    name: stemy-mastering-engine
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r mastering_engine/requirements.txt
+    startCommand: gunicorn -c gunicorn.conf.py app:app --chdir mastering_engine
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: WEB_CONCURRENCY
+        value: "1"
