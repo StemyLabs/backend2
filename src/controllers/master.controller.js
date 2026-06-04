@@ -52,18 +52,18 @@ export const createQuickMaster = async (req, res) => {
     console.log("[QUICK MASTER] New Quick Master request received");
     console.log("[QUICK MASTER] Request user ID:", req.userId);
     console.log("[QUICK MASTER] Request body keys:", Object.keys(req.body));
+    const file = req.files?.audio?.[0] || req.file;
     console.log(
       "[QUICK MASTER] Request file info:",
-      req.file
+      file
         ? {
-            originalname: req.file.originalname,
-            mimetype: req.file.mimetype,
-            size: req.file.size,
+            originalname: file.originalname,
+            mimetype: file.mimetype,
+            size: file.size,
+            path: file.path || "(no disk path)",
           }
         : "No file",
     );
-
-    const file = req.files?.audio?.[0] || req.file;
     const { genre, metadata: metadataRaw } = req.body;
     const artwork = req.files?.artwork?.[0] || null;
 
@@ -82,6 +82,12 @@ export const createQuickMaster = async (req, res) => {
     if (file.mimetype && !ALLOWED_MIME.has(file.mimetype)) {
       console.error("[QUICK MASTER] Unsupported MIME type:", file.mimetype);
       return res.status(400).json({ message: "Unsupported audio format" });
+    }
+    if (!file.path || !fs.existsSync(file.path)) {
+      console.error("[QUICK MASTER] Upload missing on disk:", file.path);
+      return res.status(400).json({
+        message: "Upload did not land on disk. Try again in a few seconds.",
+      });
     }
 
     // Parse metadata and handle artwork

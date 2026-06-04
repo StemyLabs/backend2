@@ -100,17 +100,34 @@ if (redisConnection) {
         srcPath = pathCache.get(masterId);
         if (srcPath) pathCache.delete(masterId);
 
+        const expectedSource = path.join(
+          MASTER_TMP_DIR,
+          `${masterId}-source${path.extname(master.sourceName) || ".audio"}`,
+        );
         if (!srcPath || !fs.existsSync(srcPath)) {
-          const sourceDownloadUrl = await getDownloadUrl(master.sourceUrl);
-          marks.push(T("signed_url"));
-          srcPath = path.join(
-            MASTER_TMP_DIR,
-            `${masterId}-source${path.extname(master.sourceName) || ".audio"}`,
-          );
-          const sourceResponse = await fetch(sourceDownloadUrl);
-          if (!sourceResponse.ok) throw new Error("Failed to download source audio");
-          const buf = Buffer.from(await sourceResponse.arrayBuffer());
-          await fsp.writeFile(srcPath, buf);
+          if (fs.existsSync(expectedSource)) {
+            srcPath = expectedSource;
+          } else if (master.sourceUrl?.startsWith("local://pending")) {
+            throw new Error(
+              "Source file was not found on the server (upload cache miss). " +
+                "Please upload the track again and wait for the previous job to finish.",
+            );
+          } else {
+            const sourceDownloadUrl = await getDownloadUrl(master.sourceUrl);
+            if (sourceDownloadUrl.startsWith("local://")) {
+              throw new Error(
+                "Invalid local source URL; re-upload the track and try again.",
+              );
+            }
+            marks.push(T("signed_url"));
+            srcPath = expectedSource;
+            const sourceResponse = await fetch(sourceDownloadUrl);
+            if (!sourceResponse.ok) {
+              throw new Error("Failed to download source audio");
+            }
+            const buf = Buffer.from(await sourceResponse.arrayBuffer());
+            await fsp.writeFile(srcPath, buf);
+          }
         }
         marks.push(T("get_src"));
 
@@ -352,6 +369,17 @@ export const enqueueMasteringJob = async (masterId, sourcePath) => {
       await fsp.unlink(sourcePath).catch(() => {});
     }
     pathCache.set(masterId, dest);
+    console.log(
+      "[QUICK MASTER] Source cached for %s → %s",
+      masterId,
+      dest,
+    );
+  } else {
+    console.warn(
+      "[QUICK MASTER] No source on disk at enqueue for %s (path=%s)",
+      masterId,
+      sourcePath,
+    );
   }
 
   if (!masteringQueue) {
