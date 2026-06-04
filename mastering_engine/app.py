@@ -29,6 +29,7 @@ import urllib.request
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file, abort
+from werkzeug.exceptions import HTTPException
 from flask_cors import CORS
 
 from genres import GENRES, DEFAULT_GENRE, get_preset
@@ -299,14 +300,29 @@ def master_local():
     def _path_under_temp(raw: str) -> Path:
         p = Path(raw).resolve()
         root = STEMY_TEMP_DIR.resolve()
-        if not str(p).startswith(str(root)):
-            abort(403, description="Path not allowed.")
+        root.mkdir(parents=True, exist_ok=True)
+        # Must match Node STEMY_TEMP_DIR (e.g. /var/lib/stemy/masters)
+        try:
+            common = os.path.commonpath([str(p), str(root)])
+        except ValueError as exc:
+            abort(403, description=f"Path not allowed: {exc}")
+        if common != str(root):
+            abort(
+                403,
+                description=(
+                    f"Path not under STEMY_TEMP_DIR ({root}). "
+                    f"Set STEMY_TEMP_DIR on Python to match Node (/var/lib/stemy/masters)."
+                ),
+            )
         return p
 
     try:
         in_path = _path_under_temp(raw_path)
-    except Exception:
-        abort(400, description="Invalid path.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("Invalid input path %s: %s", raw_path, exc)
+        abort(400, description=f"Invalid path: {exc}")
 
     if not in_path.is_file():
         abort(404, description="Input file not found.")
@@ -315,8 +331,11 @@ def master_local():
     if raw_out:
         try:
             out_path = _path_under_temp(raw_out)
-        except Exception:
-            abort(400, description="Invalid output_path.")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            log.exception("Invalid output path %s: %s", raw_out, exc)
+            abort(400, description=f"Invalid output_path: {exc}")
     else:
         out_path = temp_path(f"_out{out_ext}")
     t_start = time.perf_counter()

@@ -132,6 +132,9 @@ User=root
 WorkingDirectory=/var/www/python-backend/mastering_engine
 Environment="PATH=/var/www/python-backend/mastering_engine/venv/bin:/usr/bin:/bin"
 Environment="FFMPEG_PATH=/usr/bin/ffmpeg"
+Environment="STEMY_TEMP_DIR=/var/lib/stemy/masters"
+Environment="STEMY_TURBO=1"
+Environment="STEMY_OUTPUT_EXT=.flac"
 ExecStart=/var/www/python-backend/mastering_engine/venv/bin/gunicorn app:app --bind 127.0.0.1:8000 --timeout 1200 --workers 1
 Restart=always
 
@@ -293,7 +296,7 @@ PYTHON_USE_LOCAL_CLI=true
 PYTHON_LOCAL_MODE=http
 ```
 
-**Python** (systemd `Environment=` or `/etc/environment`):
+**Python** (systemd — **must match Node** `STEMY_TEMP_DIR` or `/master/local` returns 400):
 
 ```env
 STEMY_TEMP_DIR=/var/lib/stemy/masters
