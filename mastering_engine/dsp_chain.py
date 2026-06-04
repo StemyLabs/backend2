@@ -167,6 +167,24 @@ def _process_board_chunk(
     return np.asarray(out, dtype=np.float32)
 
 
+def _apply_chain_to_chunk(
+    chunk_cf: np.ndarray,
+    board: Pedalboard,
+    preset: dict,
+    comp_cfg: dict,
+    sr: int,
+    *,
+    first: bool,
+) -> np.ndarray:
+    """EQ + comp + saturation + widen on one chunk; returns (N, 2) float32."""
+    chunk_cf = normalize_to_stereo_channels_first(chunk_cf)
+    effected = _process_board_chunk(board, chunk_cf, sr, reset=first)
+    effected *= _db_to_lin(comp_cfg.get("makeup_db", 0.0))
+    samples = channels_first_to_samples(effected)
+    samples = _soft_clip_saturation(samples, preset["saturation_drive"])
+    return _ms_widen(samples, preset.get("width", 1.0))
+
+
 def _flush_board(board: Pedalboard, sr: int) -> np.ndarray | None:
     """Drain plugin tails after chunked processing."""
     try:
@@ -530,6 +548,40 @@ def master_audio_file(
     _check_upload_size(size_bytes)
 
     duration_sec, src_sr, channels = probe_audio_path(input_path)
+
+    if os.environ.get("STEMY_TURBO", "1") == "1":
+        from turbo_chain import master_turbo
+
+        preset = get_preset(genre)
+        target_lufs = preset.get("target_lufs", target_lufs)
+        target_tp_db = preset.get("target_tp_db", target_tp_db)
+        out_ext = os.environ.get("STEMY_OUTPUT_EXT", ".flac").lower()
+        if out_ext not in (".flac", ".wav"):
+            out_ext = ".flac"
+        turbo_out = Path(output_path).with_suffix(out_ext)
+        log.info(
+            "Turbo mode — genre=%s %.1f min, %.1f MB (target ≤%ss)",
+            genre,
+            duration_sec / 60,
+            size_bytes / (1024 * 1024),
+            os.environ.get("STEMY_TARGET_SEC", "90"),
+        )
+        result = master_turbo(input_path, turbo_out, genre)
+        if metadata or artwork_bytes:
+            if turbo_out.suffix.lower() == ".wav":
+                _embed_riff_metadata_file(turbo_out, metadata, artwork_bytes)
+            else:
+                log.info("Skipping metadata embed for turbo FLAC output")
+        total = time.perf_counter() - t0
+        log.info("TOTAL turbo: %.1fs", total)
+        return {
+            **result,
+            "genre": genre,
+            "target_lufs": target_lufs,
+            "target_tp_db": target_tp_db,
+            "output_path": str(turbo_out),
+        }
+
     check_disk_space(duration_sec)
 
     preset = get_preset(genre)

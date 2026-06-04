@@ -5,8 +5,18 @@ import https from "https";
 import http from "http";
 import fs from "fs";
 import fsp from "fs/promises";
+import path from "path";
 
 const ALLOWED_PLANS = ["BASIC", "PRO"];
+
+function masteredDownloadName(sourceName, filePathOrUrl) {
+  const base = sourceName?.replace(/\.[^.]+$/, "") || "track";
+  const ext = path.extname(String(filePathOrUrl || "")).toLowerCase();
+  if (ext === ".flac") {
+    return { filename: `mastered-${base}.flac`, contentType: "audio/flac" };
+  }
+  return { filename: `mastered-${base}.wav`, contentType: "audio/wav" };
+}
 
 const checkUserPlan = async (userId) => {
   const subscription = await prisma.subscription.findFirst({
@@ -162,8 +172,11 @@ export const getMasterDownload = async (req, res) => {
   // Check local temp cache first (fastest)
   const localPath = getLocalDownloadPath(master.id);
   if (localPath && fs.existsSync(localPath)) {
-    const filename = `mastered-${master.sourceName?.replace(/\.[^.]+$/, "") || "track"}.wav`;
-    res.setHeader("Content-Type", "audio/wav");
+    const { filename, contentType } = masteredDownloadName(
+      master.sourceName,
+      localPath,
+    );
+    res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Cache-Control", "no-store");
     const stream = fs.createReadStream(localPath);
@@ -187,8 +200,11 @@ export const getMasterDownload = async (req, res) => {
     const tmpDir = pathLib.join(os.tmpdir(), "stemy-masters");
     const diskPath = pathLib.join(tmpDir, pathLib.basename(localKey));
     if (fs.existsSync(diskPath)) {
-      const filename = `mastered-${master.sourceName?.replace(/\.[^.]+$/, "") || "track"}.wav`;
-      res.setHeader("Content-Type", "audio/wav");
+      const { filename, contentType } = masteredDownloadName(
+        master.sourceName,
+        diskPath,
+      );
+      res.setHeader("Content-Type", contentType);
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
       res.setHeader("Cache-Control", "no-store");
       const stream = fs.createReadStream(diskPath);
@@ -204,9 +220,13 @@ export const getMasterDownload = async (req, res) => {
   const signedUrl = await getDownloadUrl(master.outputUrl);
   
   const urlObj = new URL(master.outputUrl);
-  const filename = urlObj.pathname.split("/").pop() || "mastered-track.wav";
-  
-  res.setHeader("Content-Type", "audio/wav");
+  const urlName = urlObj.pathname.split("/").pop() || "mastered-track.wav";
+  const { filename, contentType } = masteredDownloadName(
+    master.sourceName,
+    urlName,
+  );
+
+  res.setHeader("Content-Type", contentType);
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.setHeader("Cache-Control", "no-store");
   

@@ -3,6 +3,7 @@ import Redis from "ioredis";
 import { openAsBlob } from "node:fs";
 import { Readable } from "stream";
 import { env } from "../config/env.js";
+import { runLocalMasterCli } from "./local-master.js";
 import { prisma } from "../lib/prisma.js";
 import { sendEmail } from "../utils/email.js";
 import { MASTER_TMP_DIR } from "../utils/master-temp.js";
@@ -132,69 +133,114 @@ if (redisConnection) {
           }
         }
 
-        const formData = await buildMasterFormData({
-          srcPath,
-          sourceName: master.sourceName,
-          sourceMime: master.sourceMime,
-          genre: master.genre,
-          metadata: master.metadata,
-          artBuf,
-          artworkUrl: master.metadata?.artworkUrl,
-        });
+        const outExt = (process.env.STEMY_OUTPUT_EXT || ".flac").toLowerCase();
+        const tmpPath = path.join(MASTER_TMP_DIR, `${masterId}${outExt}`);
 
-        console.log(
-          "[QUICK MASTER] POST /master — file=%s size=%d bytes",
-          master.sourceName,
-          srcStat.size,
-        );
+        let lufs = -14;
+        let dbtp = -1;
+        let dr = 6;
+        let duration = 0;
+        let pyTime = null;
+        let outputLength;
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 600000);
+        const useLocalCli = env.PYTHON_USE_LOCAL_CLI === true;
 
-        let pythonResponse;
-        try {
-          pythonResponse = await fetch(`${env.PYTHON_ENGINE_URL}/master`, {
-            method: "POST",
-            body: formData,
-            signal: controller.signal,
-          });
-        } catch (fetchError) {
-          clearTimeout(timeoutId);
-          throw new Error(
-            fetchError.name === "AbortError"
-              ? "Python engine request timed out after 10 minutes"
-              : `Cannot connect to Python engine: ${fetchError.message}`,
+        if (useLocalCli) {
+          console.log(
+            "[QUICK MASTER] Local CLI — file=%s size=%d bytes",
+            master.sourceName,
+            srcStat.size,
           );
+          const { analysis, outputPath } = await runLocalMasterCli({
+            inputPath: srcPath,
+            outputPath: tmpPath,
+            genre: master.genre,
+          });
+          lufs = analysis.lufs ?? lufs;
+          dbtp = analysis.dbtp ?? dbtp;
+          dr = analysis.dr ?? dr;
+          duration = analysis.duration ?? duration;
+          pyTime = String(Math.round((analysis.elapsed_sec || 0) * 1000));
+          const outStat = await fsp.stat(outputPath);
+          outputLength = outStat.size;
+          if (outputPath !== tmpPath) {
+            await fsp.rename(outputPath, tmpPath).catch(async () => {
+              await fsp.copyFile(outputPath, tmpPath);
+              await fsp.unlink(outputPath).catch(() => {});
+            });
+          }
+          marks.push(T("python_done"));
+          marks.push(T("write_local"));
+        } else {
+          const formData = await buildMasterFormData({
+            srcPath,
+            sourceName: master.sourceName,
+            sourceMime: master.sourceMime,
+            genre: master.genre,
+            metadata: master.metadata,
+            artBuf,
+            artworkUrl: master.metadata?.artworkUrl,
+          });
+
+          console.log(
+            "[QUICK MASTER] POST /master — file=%s size=%d bytes",
+            master.sourceName,
+            srcStat.size,
+          );
+
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 120000);
+
+          let pythonResponse;
+          try {
+            pythonResponse = await fetch(`${env.PYTHON_ENGINE_URL}/master`, {
+              method: "POST",
+              body: formData,
+              signal: controller.signal,
+            });
+          } catch (fetchError) {
+            clearTimeout(timeoutId);
+            throw new Error(
+              fetchError.name === "AbortError"
+                ? "Python engine request timed out after 120 seconds"
+                : `Cannot connect to Python engine: ${fetchError.message}`,
+            );
+          }
+          clearTimeout(timeoutId);
+          marks.push(T("python_done"));
+
+          if (!pythonResponse.ok) {
+            const errorText = await pythonResponse.text();
+            throw new Error(`Python Engine Error: ${pythonResponse.statusText} - ${errorText}`);
+          }
+
+          lufs = parseFloat(pythonResponse.headers.get("X-Lufs-Actual")) || -14;
+          dbtp = parseFloat(pythonResponse.headers.get("X-Tp-Actual")) || -1;
+          dr = parseFloat(pythonResponse.headers.get("X-DR-Actual")) || 6;
+          duration = parseFloat(pythonResponse.headers.get("X-Duration-Actual")) || 0;
+          pyTime = pythonResponse.headers.get("X-Processing-Time-Ms");
+          const outFmt = pythonResponse.headers.get("X-Output-Format") || "wav";
+          const httpExt = outFmt === "flac" ? ".flac" : ".wav";
+          const httpTmp = path.join(MASTER_TMP_DIR, `${masterId}${httpExt}`);
+          outputLength = parseInt(pythonResponse.headers.get("content-length"), 10) || undefined;
+
+          const nodeStream = Readable.fromWeb(pythonResponse.body);
+          const fileStream = fs.createWriteStream(httpTmp);
+          nodeStream.pipe(fileStream);
+
+          await new Promise((resolve, reject) => {
+            fileStream.on("finish", resolve);
+            fileStream.on("error", reject);
+          });
+          if (httpTmp !== tmpPath) {
+            await fsp.rename(httpTmp, tmpPath).catch(() => {});
+          }
+          marks.push(T("write_local"));
         }
-        clearTimeout(timeoutId);
-        marks.push(T("python_done"));
 
-        if (!pythonResponse.ok) {
-          const errorText = await pythonResponse.text();
-          throw new Error(`Python Engine Error: ${pythonResponse.statusText} - ${errorText}`);
-        }
-
-        const lufs = parseFloat(pythonResponse.headers.get("X-Lufs-Actual")) || -14;
-        const dbtp = parseFloat(pythonResponse.headers.get("X-Tp-Actual")) || -1;
-        const dr = parseFloat(pythonResponse.headers.get("X-DR-Actual")) || 6;
-        const duration = parseFloat(pythonResponse.headers.get("X-Duration-Actual")) || 0;
-        const pyTime = pythonResponse.headers.get("X-Processing-Time-Ms");
-
-        const outputKey = `masters/${master.userId}/${Date.now()}-mastered-${master.sourceName}`;
-        const tmpPath = path.join(MASTER_TMP_DIR, `${masterId}.wav`);
-        const outputLength = parseInt(pythonResponse.headers.get("content-length"), 10) || undefined;
-
-        const webStream = pythonResponse.body;
-        const nodeStream = Readable.fromWeb(webStream);
-
-        const fileStream = fs.createWriteStream(tmpPath);
-        nodeStream.pipe(fileStream);
-
-        await new Promise((resolve, reject) => {
-          fileStream.on("finish", resolve);
-          fileStream.on("error", reject);
-        });
-        marks.push(T("write_local"));
+        const outBase =
+          master.sourceName?.replace(/\.[^.]+$/, "") || "track";
+        const outputKey = `masters/${master.userId}/${Date.now()}-mastered-${outBase}${outExt}`;
 
         downloadCache.set(masterId, tmpPath);
 
@@ -237,7 +283,7 @@ if (redisConnection) {
             const result = await uploadStream({
               key: outputKey,
               stream: fs.createReadStream(tmpPath),
-              contentType: "audio/wav",
+              contentType: outExt === ".flac" ? "audio/flac" : "audio/wav",
               contentLength: outStat.size,
             });
             await prisma.master.update({
