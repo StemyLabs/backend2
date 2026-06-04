@@ -291,15 +291,20 @@ def master_local():
 
     body = request.get_json(silent=True) or {}
     raw_path = body.get("path")
+    raw_out = body.get("output_path")
     genre = (body.get("genre") or DEFAULT_GENRE).strip().lower()
     if not raw_path:
         abort(400, description="Missing 'path'.")
 
-    try:
-        in_path = Path(raw_path).resolve()
+    def _path_under_temp(raw: str) -> Path:
+        p = Path(raw).resolve()
         root = STEMY_TEMP_DIR.resolve()
-        if not str(in_path).startswith(str(root)):
+        if not str(p).startswith(str(root)):
             abort(403, description="Path not allowed.")
+        return p
+
+    try:
+        in_path = _path_under_temp(raw_path)
     except Exception:
         abort(400, description="Invalid path.")
 
@@ -307,7 +312,13 @@ def master_local():
         abort(404, description="Input file not found.")
 
     out_ext = os.environ.get("STEMY_OUTPUT_EXT", ".flac").lower()
-    out_path = temp_path(f"_out{out_ext}")
+    if raw_out:
+        try:
+            out_path = _path_under_temp(raw_out)
+        except Exception:
+            abort(400, description="Invalid output_path.")
+    else:
+        out_path = temp_path(f"_out{out_ext}")
     t_start = time.perf_counter()
     try:
         analysis = master_audio_file(in_path, out_path, genre=genre)

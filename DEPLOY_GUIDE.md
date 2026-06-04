@@ -286,9 +286,10 @@ chmod 755 /var/lib/stemy/masters
 
 ```env
 STEMY_TEMP_DIR=/var/lib/stemy/masters
+PYTHON_ENGINE_URL=http://127.0.0.1:8000
 PYTHON_USE_LOCAL_CLI=true
-PYTHON_BIN=/var/www/python-backend/mastering_engine/venv/bin/python
-PYTHON_CLI_PATH=/var/www/python-backend/mastering_engine/cli_master.py
+# Use http (default) — calls warm Gunicorn POST /master/local (~2s). Avoid cli (~10s cold start per job).
+PYTHON_LOCAL_MODE=http
 ```
 
 **Python** (systemd `Environment=` or `/etc/environment`):

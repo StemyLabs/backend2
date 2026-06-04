@@ -3,7 +3,7 @@ import Redis from "ioredis";
 import { openAsBlob } from "node:fs";
 import { Readable } from "stream";
 import { env } from "../config/env.js";
-import { runLocalMasterCli } from "./local-master.js";
+import { runLocalMaster } from "./local-master.js";
 import { prisma } from "../lib/prisma.js";
 import { sendEmail } from "../utils/email.js";
 import {
@@ -163,12 +163,14 @@ if (redisConnection) {
         const useLocalCli = env.PYTHON_USE_LOCAL_CLI === true;
 
         if (useLocalCli) {
+          const localMode = (process.env.PYTHON_LOCAL_MODE || "http").toLowerCase();
           console.log(
-            "[QUICK MASTER] Local CLI — file=%s size=%d bytes",
+            "[QUICK MASTER] Local %s — file=%s size=%d bytes",
+            localMode === "cli" ? "CLI" : "HTTP",
             master.sourceName,
             srcStat.size,
           );
-          const { analysis, outputPath } = await runLocalMasterCli({
+          const { analysis, outputPath } = await runLocalMaster({
             inputPath: srcPath,
             outputPath: tmpPath,
             genre: master.genre,
@@ -177,15 +179,12 @@ if (redisConnection) {
           dbtp = analysis.dbtp ?? dbtp;
           dr = analysis.dr ?? dr;
           duration = analysis.duration ?? duration;
-          pyTime = String(Math.round((analysis.elapsed_sec || 0) * 1000));
+          pyTime = String(
+            analysis.processing_ms ??
+              Math.round((analysis.elapsed_sec || 0) * 1000),
+          );
           const outStat = await fsp.stat(outputPath);
           outputLength = outStat.size;
-          if (outputPath !== tmpPath) {
-            await fsp.rename(outputPath, tmpPath).catch(async () => {
-              await fsp.copyFile(outputPath, tmpPath);
-              await fsp.unlink(outputPath).catch(() => {});
-            });
-          }
           marks.push(T("python_done"));
           marks.push(T("write_local"));
         } else {
@@ -346,11 +345,38 @@ if (redisConnection) {
         }
       }
     },
-    { connection: redisConnection, drainDelay: 200 },
+    {
+      connection: redisConnection,
+      drainDelay: 200,
+      concurrency: 1,
+      lockDuration: 300_000,
+    },
   );
+
+  worker.on("active", (job) => {
+    console.log(
+      "[QUICK MASTER] Worker started job %s master=%s",
+      job.id,
+      job.data.masterId,
+    );
+  });
+
+  worker.on("completed", (job) => {
+    console.log(
+      "[QUICK MASTER] Worker completed job %s master=%s",
+      job.id,
+      job.data.masterId,
+    );
+  });
 
   worker.on("failed", async (job, error) => {
     if (!job) return;
+    console.error(
+      "[QUICK MASTER] Worker failed job %s master=%s: %s",
+      job.id,
+      job.data.masterId,
+      error?.message,
+    );
     await prisma.master.update({
       where: { id: job.data.masterId },
       data: { status: "FAILED", error: error.message },
@@ -388,7 +414,12 @@ export const enqueueMasteringJob = async (
     return;
   }
 
-  await masteringQueue.add("process", { masterId });
+  const job = await masteringQueue.add(
+    "process",
+    { masterId },
+    { removeOnComplete: 200, removeOnFail: 100 },
+  );
+  console.log("[QUICK MASTER] Bull job %s queued for master %s", job.id, masterId);
 };
 
 export const getLocalDownloadPath = (masterId) => downloadCache.get(masterId);
