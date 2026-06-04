@@ -17,12 +17,27 @@ const resolveOutputPath = (outputPath) => {
     : `${outputPath.replace(/\.[^.]+$/, "")}${ext}`;
 };
 
+/** HTTP timeout for /master/local — must exceed ffmpeg time for long tracks. */
+export const pythonHttpTimeoutMs = (fileSizeBytes = 0) => {
+  const fixed = parseInt(process.env.STEMY_PYTHON_HTTP_TIMEOUT_MS || "0", 10);
+  if (fixed > 0) return fixed;
+  const mb = fileSizeBytes / (1024 * 1024);
+  // ~30s per MB + 2 min base, cap 15 min (matches Python ffmpeg cap)
+  return Math.min(900_000, Math.max(120_000, Math.ceil(mb * 30_000 + 120_000)));
+};
+
 /** Warm Gunicorn on localhost — fast (no Python cold start). */
-export const runLocalMasterHttp = async ({ inputPath, outputPath, genre }) => {
+export const runLocalMasterHttp = async ({
+  inputPath,
+  outputPath,
+  genre,
+  timeoutMs,
+}) => {
   const base = env.PYTHON_ENGINE_URL.replace(/\/$/, "");
   const out = resolveOutputPath(outputPath);
+  const ms = timeoutMs ?? pythonHttpTimeoutMs(0);
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 120_000);
+  const timeoutId = setTimeout(() => controller.abort(), ms);
 
   let res;
   try {
@@ -111,6 +126,9 @@ export const runLocalMasterCli = ({ inputPath, outputPath, genre }) =>
 
 /** VPS default: HTTP to warm Gunicorn. Set PYTHON_LOCAL_MODE=cli to force subprocess. */
 export const runLocalMaster = async (opts) => {
+  if (opts.fileSizeBytes && !opts.timeoutMs) {
+    opts = { ...opts, timeoutMs: pythonHttpTimeoutMs(opts.fileSizeBytes) };
+  }
   const mode = (process.env.PYTHON_LOCAL_MODE || "http").toLowerCase();
   const isLocalEngine = /localhost|127\.0\.0\.1/i.test(env.PYTHON_ENGINE_URL);
 

@@ -3,7 +3,7 @@ import Redis from "ioredis";
 import { openAsBlob } from "node:fs";
 import { Readable } from "stream";
 import { env } from "../config/env.js";
-import { runLocalMaster } from "./local-master.js";
+import { pythonHttpTimeoutMs, runLocalMaster } from "./local-master.js";
 import { prisma } from "../lib/prisma.js";
 import { sendEmail } from "../utils/email.js";
 import {
@@ -195,10 +195,16 @@ export const processMasteringJob = async (masterId) => {
             master.sourceName,
             srcStat.size,
           );
+          const httpTimeoutMs = pythonHttpTimeoutMs(srcStat.size);
+          console.log(
+            `[QUICK MASTER] Python HTTP timeout ${Math.round(httpTimeoutMs / 1000)}s (${(srcStat.size / (1024 * 1024)).toFixed(1)} MB)`,
+          );
           const { analysis, outputPath } = await runLocalMaster({
             inputPath: srcPath,
             outputPath: tmpPath,
             genre: master.genre,
+            fileSizeBytes: srcStat.size,
+            timeoutMs: httpTimeoutMs,
           });
           lufs = analysis.lufs ?? lufs;
           dbtp = analysis.dbtp ?? dbtp;

@@ -304,12 +304,19 @@ STEMY_TURBO=1
 STEMY_TURBO_WORKERS=6
 STEMY_TARGET_SEC=90
 STEMY_OUTPUT_EXT=.flac
-STEMY_FFMPEG_TIMEOUT_SEC=85
+# STEMY_FFMPEG_TIMEOUT_SEC=0   # 0 = auto: ~0.25× track duration + 90s, cap 900s
+# STEMY_PARALLEL_MAX_DURATION_SEC=900   # no Pedalboard fallback above 15 min
+```
+
+**Node** (optional — must exceed Python ffmpeg time for large files):
+
+```env
+# STEMY_PYTHON_HTTP_TIMEOUT_MS=0   # 0 = auto from upload size (~30s/MB + 2 min, cap 15 min)
 ```
 
 Turbo uses **ffmpeg** (`-threads 0`) for a single-pass genre chain + loudnorm. Output is **FLAC** (smaller/faster than 24-bit WAV). Set `STEMY_TURBO=0` only if you need the legacy two-pass WAV pipeline.
 
-After deploy, logs should show `Turbo ffmpeg done in …s` and total under ~90s for typical 1-hour MP3s on a 6-core VPS.
+Short tracks (~1–2 min) typically finish in **~10s**. Long tracks scale timeouts automatically; do **not** set `STEMY_FFMPEG_TIMEOUT_SEC=85` on VPS (that caused 30 min files to abort Node at 120s while Python kept running).
 
 ---
 

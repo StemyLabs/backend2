@@ -36,7 +36,18 @@ TARGET_SEC = float(os.environ.get("STEMY_TARGET_SEC", "90"))
 TURBO_WORKERS = int(os.environ.get("STEMY_TURBO_WORKERS", str(min(6, os.cpu_count() or 4))))
 LUFS_PROBE_SEC = float(os.environ.get("STEMY_LUFS_PROBE_SEC", "90"))
 OUTPUT_EXT = os.environ.get("STEMY_OUTPUT_EXT", ".flac").lower()
-FFMPEG_TIMEOUT = int(os.environ.get("STEMY_FFMPEG_TIMEOUT_SEC", "85"))
+PARALLEL_MAX_DURATION_SEC = float(
+    os.environ.get("STEMY_PARALLEL_MAX_DURATION_SEC", "900")
+)
+
+
+def _ffmpeg_timeout_for(duration_sec: float) -> int:
+    """Scale ffmpeg wait with track length (0 = auto). Cap 15 min."""
+    fixed = int(os.environ.get("STEMY_FFMPEG_TIMEOUT_SEC", "0"))
+    if fixed > 0:
+        return fixed
+    # ~0.25× realtime + 90s headroom (30 min → ~7 min max cap 900s)
+    return max(90, min(900, int(duration_sec * 0.25 + 90)))
 
 
 def _ffmpeg_bin() -> str | None:
@@ -112,6 +123,8 @@ def _master_ffmpeg(
     input_path: Path,
     output_path: Path,
     preset: dict,
+    *,
+    timeout_sec: int | None = None,
 ) -> dict:
     ffmpeg = _ffmpeg_bin()
     if not ffmpeg:
@@ -146,14 +159,17 @@ def _master_ffmpeg(
         *codec,
         str(out),
     ]
-    log.info("Turbo ffmpeg: %s", " ".join(cmd[:12]) + " ...")
+    if timeout_sec is None:
+        duration_in, _, _ = probe_audio_path(input_path)
+        timeout_sec = _ffmpeg_timeout_for(duration_in)
+    log.info("Turbo ffmpeg (timeout %ds): %s", timeout_sec, " ".join(cmd[:12]) + " ...")
 
     t0 = time.perf_counter()
     proc = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
-        timeout=FFMPEG_TIMEOUT,
+        timeout=timeout_sec,
         check=False,
     )
     elapsed = time.perf_counter() - t0
@@ -402,16 +418,39 @@ def master_turbo(
     input_path = Path(input_path)
     output_path = Path(output_path)
     preset = get_preset(genre)
+    duration_sec, _, _ = probe_audio_path(input_path)
+    ffmpeg_timeout = _ffmpeg_timeout_for(duration_sec)
 
     ffmpeg = _ffmpeg_bin()
     if ffmpeg:
         try:
-            return _master_ffmpeg(input_path, output_path, preset)
+            return _master_ffmpeg(
+                input_path, output_path, preset, timeout_sec=ffmpeg_timeout
+            )
+        except subprocess.TimeoutExpired as exc:
+            log.warning(
+                "ffmpeg timed out after %ds for %.1f min track",
+                ffmpeg_timeout,
+                duration_sec / 60,
+            )
+            raise RuntimeError(
+                f"Mastering timed out after {ffmpeg_timeout}s. "
+                f"For {duration_sec / 60:.0f} min tracks set STEMY_FFMPEG_TIMEOUT_SEC higher "
+                f"(e.g. {min(900, int(duration_sec * 0.35 + 120))})."
+            ) from exc
         except Exception as exc:
+            if duration_sec > PARALLEL_MAX_DURATION_SEC:
+                raise RuntimeError(f"ffmpeg failed for long track: {exc}") from exc
             log.warning("ffmpeg turbo failed (%s), trying parallel fallback", exc)
     else:
         log.warning(
             "ffmpeg not found on PATH — install ffmpeg for fast turbo (apt install ffmpeg)",
+        )
+
+    if duration_sec > PARALLEL_MAX_DURATION_SEC:
+        raise RuntimeError(
+            f"Track is {duration_sec / 60:.0f} minutes; parallel fallback is disabled. "
+            "Install ffmpeg and use STEMY_FFMPEG_TIMEOUT_SEC for long files."
         )
 
     return _master_parallel(input_path, output_path, genre, preset)
