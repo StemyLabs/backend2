@@ -6,7 +6,12 @@ import { env } from "../config/env.js";
 import { runLocalMasterCli } from "./local-master.js";
 import { prisma } from "../lib/prisma.js";
 import { sendEmail } from "../utils/email.js";
-import { MASTER_TMP_DIR } from "../utils/master-temp.js";
+import {
+  MASTER_TMP_DIR,
+  findStagedMasterSource,
+  masterSourcePath,
+  stageMasterSource,
+} from "../utils/master-temp.js";
 import { getDownloadUrl, uploadStream } from "./storage.service.js";
 import fs from "fs";
 import fsp from "fs/promises";
@@ -20,7 +25,6 @@ export const masteringQueue = redisConnection
   ? new Queue("mastering", { connection: redisConnection })
   : null;
 
-const pathCache = new Map();
 const downloadCache = new Map();
 
 const safeUnlink = (filePath) => {
@@ -97,38 +101,34 @@ if (redisConnection) {
           data: { status: "PROCESSING" },
         });
 
-        srcPath = pathCache.get(masterId);
-        if (srcPath) pathCache.delete(masterId);
+        const expectedSource = masterSourcePath(masterId, master.sourceName);
+        srcPath = fs.existsSync(expectedSource)
+          ? expectedSource
+          : await findStagedMasterSource(masterId);
 
-        const expectedSource = path.join(
-          MASTER_TMP_DIR,
-          `${masterId}-source${path.extname(master.sourceName) || ".audio"}`,
-        );
-        if (!srcPath || !fs.existsSync(srcPath)) {
-          if (fs.existsSync(expectedSource)) {
-            srcPath = expectedSource;
-          } else if (master.sourceUrl?.startsWith("local://pending")) {
+        if (!srcPath) {
+          if (master.sourceUrl?.startsWith("local://pending")) {
             throw new Error(
-              "Source file was not found on the server (upload cache miss). " +
-                "Please upload the track again and wait for the previous job to finish.",
+              "Source file was not found on the server. Re-upload the track and try again.",
             );
-          } else {
-            const sourceDownloadUrl = await getDownloadUrl(master.sourceUrl);
-            if (sourceDownloadUrl.startsWith("local://")) {
-              throw new Error(
-                "Invalid local source URL; re-upload the track and try again.",
-              );
-            }
-            marks.push(T("signed_url"));
-            srcPath = expectedSource;
-            const sourceResponse = await fetch(sourceDownloadUrl);
-            if (!sourceResponse.ok) {
-              throw new Error("Failed to download source audio");
-            }
-            const buf = Buffer.from(await sourceResponse.arrayBuffer());
-            await fsp.writeFile(srcPath, buf);
           }
+          const sourceDownloadUrl = await getDownloadUrl(master.sourceUrl);
+          if (sourceDownloadUrl.startsWith("local://")) {
+            throw new Error(
+              "Invalid local source URL; re-upload the track and try again.",
+            );
+          }
+          marks.push(T("signed_url"));
+          srcPath = expectedSource;
+          const sourceResponse = await fetch(sourceDownloadUrl);
+          if (!sourceResponse.ok) {
+            throw new Error("Failed to download source audio");
+          }
+          const buf = Buffer.from(await sourceResponse.arrayBuffer());
+          await fsp.writeFile(srcPath, buf);
         }
+
+        console.log("[QUICK MASTER] Using source file: %s", srcPath);
         marks.push(T("get_src"));
 
         const srcStat = await fsp.stat(srcPath);
@@ -358,29 +358,22 @@ if (redisConnection) {
   });
 }
 
-export const enqueueMasteringJob = async (masterId, sourcePath) => {
-  if (sourcePath && fs.existsSync(sourcePath)) {
-    const ext = path.extname(sourcePath) || ".audio";
-    const dest = path.join(MASTER_TMP_DIR, `${masterId}-source${ext}`);
-    try {
-      await fsp.rename(sourcePath, dest);
-    } catch {
-      await fsp.copyFile(sourcePath, dest);
-      await fsp.unlink(sourcePath).catch(() => {});
-    }
-    pathCache.set(masterId, dest);
-    console.log(
-      "[QUICK MASTER] Source cached for %s → %s",
-      masterId,
-      dest,
-    );
-  } else {
-    console.warn(
-      "[QUICK MASTER] No source on disk at enqueue for %s (path=%s)",
-      masterId,
-      sourcePath,
-    );
+export const enqueueMasteringJob = async (
+  masterId,
+  sourcePath,
+  sourceName = "",
+) => {
+  const staged = await stageMasterSource(masterId, sourcePath, sourceName);
+  if (!staged) {
+    const msg =
+      "Could not save upload on server disk. Check STEMY_TEMP_DIR permissions and disk space.";
+    await prisma.master.update({
+      where: { id: masterId },
+      data: { status: "FAILED", error: msg },
+    });
+    throw new Error(msg);
   }
+  console.log("[QUICK MASTER] Source staged for %s → %s", masterId, staged);
 
   if (!masteringQueue) {
     await prisma.master.update({
