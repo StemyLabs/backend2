@@ -1,10 +1,10 @@
 import { prisma } from "../lib/prisma.js";
-import { uploadBuffer, getDownloadUrl } from "../services/storage.service.js";
-import { enqueueMasteringJob, getLocalDownloadPath, SOURCE_DIR } from "../services/queue.service.js";
+import { uploadBuffer, uploadStream, getDownloadUrl } from "../services/storage.service.js";
+import { enqueueMasteringJob, getLocalDownloadPath } from "../services/queue.service.js";
 import https from "https";
 import http from "http";
 import fs from "fs";
-import path from "path";
+import fsp from "fs/promises";
 
 const ALLOWED_PLANS = ["BASIC", "PRO"];
 
@@ -31,8 +31,6 @@ const ALLOWED_MIME = new Set([
 ]);
 
 export const createQuickMaster = async (req, res) => {
-  const processingStartedAt = new Date().toISOString();
-
   try {
     const hasValidPlan = await checkUserPlan(req.userId);
     if (!hasValidPlan) {
@@ -77,29 +75,34 @@ export const createQuickMaster = async (req, res) => {
     }
 
     // Parse metadata and handle artwork
-    let parsedMetadata = metadataRaw ? JSON.parse(metadataRaw) : {};
-    parsedMetadata.processingStartedAt = processingStartedAt;
+    let parsedMetadata = metadataRaw ? JSON.parse(metadataRaw) : null;
 
     // Upload artwork if provided
     if (artwork) {
       const artKey = `artwork/${req.userId}/${Date.now()}-${artwork.originalname}`;
-      const artUrl = await uploadBuffer({
-        key: artKey,
-        body: artwork.buffer,
-        contentType: artwork.mimetype,
-      });
+      const artType = artwork.mimetype || "image/jpeg";
+      let artUrl;
+      if (artwork.path) {
+        const artStat = await fsp.stat(artwork.path);
+        artUrl = await uploadStream({
+          key: artKey,
+          stream: fs.createReadStream(artwork.path),
+          contentType: artType,
+          contentLength: artStat.size,
+        });
+        await fsp.unlink(artwork.path).catch(() => {});
+      } else {
+        artUrl = await uploadBuffer({
+          key: artKey,
+          body: artwork.buffer,
+          contentType: artType,
+        });
+      }
       parsedMetadata = { ...parsedMetadata, artworkUrl: artUrl };
       console.log("[QUICK MASTER] Artwork uploaded to:", artUrl);
     }
 
-    console.log("[QUICK MASTER] Writing source to local temp file...");
-    const sourceKey = `masters/${req.userId}/${Date.now()}-${file.originalname}`;
-    fs.mkdirSync(SOURCE_DIR, { recursive: true });
-    const sourcePath = path.join(SOURCE_DIR, `${Date.now()}-${file.originalname}`);
-    fs.writeFileSync(sourcePath, file.buffer);
-    console.log("[QUICK MASTER] Source written to:", sourcePath);
-
-    console.log("[QUICK MASTER] Creating database record...");
+    console.log("[QUICK MASTER] Creating database record (source R2 upload deferred)...");
     const master = await prisma.master.create({
       data: {
         userId: req.userId,
@@ -108,15 +111,15 @@ export const createQuickMaster = async (req, res) => {
         sourceName: file.originalname,
         sourceMime: file.mimetype || "application/octet-stream",
         sourceSize: file.size,
-        sourceUrl: sourceKey,
+        sourceUrl: `local://pending/${req.userId}`,
         metadata: parsedMetadata,
       },
     });
     console.log("[QUICK MASTER] Database record created with ID:", master.id);
 
     console.log("[QUICK MASTER] Enqueuing mastering job...");
-    await enqueueMasteringJob(master.id, sourcePath);
-    console.log("[QUICK MASTER] Mastering job enqueued successfully");
+    await enqueueMasteringJob(master.id, file.path || null);
+    console.log("[QUICK MASTER] Mastering job enqueued (R2 source upload runs with processing)");
 
     return res.status(201).json({ master });
   } catch (error) {

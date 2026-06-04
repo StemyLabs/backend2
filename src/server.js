@@ -72,14 +72,12 @@ app.use(
 );
 
 app.get("/", (req, res) => {
-  res.json({ message: "Stemy API is running...", timestamp: Date.now() });
+  res.json({ message: "Stemy API is running Fine...", timestamp: Date.now() });
 });
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", python: !!env.PYTHON_ENGINE_URL });
 });
-
-
 
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
@@ -128,4 +126,5 @@ process.on("unhandledRejection", (reason) => {
 process.on("uncaughtException", (err) => {
   console.error("Uncaught exception:", err);
 });
+
 export default app;  

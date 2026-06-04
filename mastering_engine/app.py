@@ -22,7 +22,6 @@ Usage:
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import time
@@ -33,7 +32,8 @@ from flask import Flask, jsonify, request, send_file, abort
 from flask_cors import CORS
 
 from genres import GENRES, DEFAULT_GENRE, get_preset
-from dsp_chain import master_audio, TARGET_LUFS, TARGET_TP_DB, DurationTooLongError, MasteringError
+from dsp_chain import master_audio_file, TARGET_LUFS, TARGET_TP_DB
+from io_stream import safe_unlink, temp_path
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -47,8 +47,10 @@ log = logging.getLogger("stemy.api")
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})   # allow all origins (update in prod)
 
-# Max upload size: 100 MB (server-side limit; frontend restricts to 20 MB)
-app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
+# Max upload size: 100 MB (matches Node API; no duration limit)
+app.config["MAX_CONTENT_LENGTH"] = int(
+    os.environ.get("STEMY_MAX_UPLOAD_BYTES", str(100 * 1024 * 1024))
+)
 
 ALLOWED_EXTENSIONS = {
     ".wav", ".mp3", ".flac", ".aiff", ".aif",
@@ -87,20 +89,11 @@ def health():
     return jsonify({"status": "ok", "service": "stemy-mastering-engine"})
 
 
-
-
 @app.route("/genres", methods=["GET"])
 def genres():
     """Return all available genre keys and human-readable labels."""
     data = [{"key": k, "label": v["label"]} for k, v in GENRES.items()]
     return jsonify(data)
-
-
-def _fetch_bytes_from_url(url: str, timeout: int = 120) -> bytes:
-    log.info("[QUICK MASTER] Fetching source from URL (stream-to-Python mode)")
-    req = urllib.request.Request(url, headers={"User-Agent": "Stemy/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
 
 
 @app.route("/master", methods=["POST", "OPTIONS"])
@@ -111,30 +104,30 @@ def master():
         return ("", 204, _cors_headers())
 
     log.info("[QUICK MASTER] New mastering request received")
+    log.info("[QUICK MASTER] Request headers: %s", dict(request.headers))
     log.info("[QUICK MASTER] Request form data: %s", dict(request.form))
     log.info("[QUICK MASTER] Request files: %s", list(request.files.keys()))
 
-    source_url = (request.form.get("source_url") or "").strip()
-    f = request.files.get("file")
-    filename = None
+    # ── Validate file ────────────────────────────────────────────────────────
+    if "file" not in request.files:
+        log.error("[QUICK MASTER] Missing 'file' field in multipart form")
+        abort(400, description="Missing 'file' field in multipart form.")
 
-    # ── Validate input source ───────────────────────────────────────────────
-    if source_url:
-        filename = request.form.get("filename") or "track.mp3"
-        log.info("[QUICK MASTER] Source URL mode: %s", filename)
-    elif f and f.filename:
-        filename = f.filename
-        log.info("[QUICK MASTER] File upload mode: %s", filename)
-    else:
-        log.error("[QUICK MASTER] Missing 'file' or 'source_url'")
-        abort(400, description="Missing audio source. Provide 'file' or 'source_url'.")
+    f = request.files["file"]
+    log.info("[QUICK MASTER] File received: %s", f.filename)
+    log.info("[QUICK MASTER] File content type: %s", f.content_type)
+    log.info("[QUICK MASTER] File size: %s bytes", f.content_length)
+    
+    if not f.filename:
+        log.error("[QUICK MASTER] Empty filename")
+        abort(400, description="Empty filename.")
 
-    if not _is_allowed(filename):
-        log.error("[QUICK MASTER] Unsupported file type: %s", filename)
+    if not _is_allowed(f.filename):
+        log.error("[QUICK MASTER] Unsupported file type: %s", f.filename)
         abort(
             415,
             description=(
-                f"Unsupported file type '{Path(filename).suffix}'. "
+                f"Unsupported file type '{Path(f.filename).suffix}'. "
                 f"Accepted: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
             ),
         )
@@ -188,48 +181,53 @@ def master():
     t_tp   = preset.get("target_tp_db", TARGET_TP_DB)
 
     log.info(
-        "[QUICK MASTER] Processing request — file=%s genre=%s target=%.1f LUFS / %.1f dBTP",
-        filename,
+        "[QUICK MASTER] Processing request — file=%s size=%s genre=%s target=%.1f LUFS / %.1f dBTP",
+        f.filename,
+        f"{f.content_length // 1024} KB" if f.content_length else "?",
         genre,
         t_lufs,
         t_tp,
     )
 
-    # ── Read raw bytes ────────────────────────────────────────────────────────
-    try:
-        if source_url:
-            log.info("[QUICK MASTER] Downloading source bytes from signed URL...")
-            raw = _fetch_bytes_from_url(source_url)
-        else:
-            log.info("[QUICK MASTER] Reading uploaded file bytes...")
-            raw = f.read()
-        log.info("[QUICK MASTER] Successfully loaded %d bytes", len(raw))
-    except Exception as exc:
-        log.error("[QUICK MASTER] Failed to load source audio: %s", exc)
-        abort(500, description="Could not load source audio.")
+    suffix = Path(f.filename).suffix.lower() or ".audio"
+    in_path = temp_path(f"_in{suffix}")
+    out_path = temp_path("_out.wav")
 
-    # ── Run mastering chain ───────────────────────────────────────────────────
+    try:
+        log.info("[QUICK MASTER] Saving upload to temp file...")
+        f.save(str(in_path))
+        log.info("[QUICK MASTER] Saved %d bytes to %s", in_path.stat().st_size, in_path)
+    except Exception as exc:
+        safe_unlink(in_path)
+        safe_unlink(out_path)
+        log.error("[QUICK MASTER] Failed to save upload: %s", exc)
+        abort(500, description="Could not read uploaded file.")
+
     t_start = time.perf_counter()
     try:
-        log.info("[QUICK MASTER] Starting audio processing...")
-        wav_bytes, analysis = master_audio(
-            raw,
+        log.info("[QUICK MASTER] Starting audio processing (streaming)...")
+        analysis = master_audio_file(
+            in_path,
+            out_path,
             genre=genre,
             target_lufs=t_lufs,
             target_tp_db=t_tp,
             metadata=metadata,
             artwork_bytes=art_bytes,
         )
-        del raw
-        log.info("[QUICK MASTER] Audio processing completed. Output size: %d bytes", len(wav_bytes))
-    except DurationTooLongError as exc:
-        log.warning("[QUICK MASTER] Track too long: %s", exc)
+        log.info(
+            "[QUICK MASTER] Audio processing completed. Output size: %d bytes",
+            out_path.stat().st_size,
+        )
+    except ValueError as exc:
+        safe_unlink(in_path)
+        safe_unlink(out_path)
+        log.warning("[QUICK MASTER] Rejected %s: %s", f.filename, exc)
         abort(413, description=str(exc))
-    except MasteringError as exc:
-        log.error("[QUICK MASTER] Mastering rejected: %s", exc)
-        abort(400, description=str(exc))
     except Exception as exc:
-        log.exception("[QUICK MASTER] Mastering failed for %s: %s", filename, exc)
+        safe_unlink(in_path)
+        safe_unlink(out_path)
+        log.exception("[QUICK MASTER] Mastering failed for %s: %s", f.filename, exc)
         abort(
             500,
             description=(
@@ -237,7 +235,11 @@ def master():
                 "Ensure the file is a valid audio file and try again."
             ),
         )
+    finally:
+        safe_unlink(in_path)
+
     elapsed_ms = int((time.perf_counter() - t_start) * 1000)
+    out_size = out_path.stat().st_size
 
     log.info(
         "Done — genre=%s lufs=%.1f dbtp=%.2f dr=%.1f elapsed=%d ms output=%d KB",
@@ -246,20 +248,19 @@ def master():
         analysis["dbtp"],
         analysis["dr"],
         elapsed_ms,
-        len(wav_bytes) // 1024,
+        out_size // 1024,
     )
 
-    # ── Build download filename ───────────────────────────────────────────────
-    stem = Path(filename).stem
+    stem = Path(f.filename).stem
     download_name = f"{stem}_mastered_{genre}.wav"
 
-    # ── Return WAV ────────────────────────────────────────────────────────────
     response = send_file(
-        io.BytesIO(wav_bytes),
+        out_path,
         mimetype="audio/wav",
         as_attachment=True,
         download_name=download_name,
     )
+    response.call_on_close(lambda: safe_unlink(out_path))
     response.headers.update({
         **_cors_headers(),
         "X-Genre":               genre,

@@ -1,2 +1,0 @@
-# Deprecated on Render — use .python-version or PYTHON_VERSION=3.12.8 instead.
-python-3.12.0

@@ -172,71 +172,88 @@ When the DSP engineer modifies preset values, the API interface remains unchange
 
 ## Requirements
 
-```bash
-# CPU-safe base stack (Render, older x86 hosts)
+```
 pip install -r requirements.txt
-
-# Optional speed boost on modern CPUs (local dev, Render Standard+)
-pip install -r requirements-speed.txt
 ```
 
 Key dependencies:
-- `numpy` + `scipy` — core DSP (no AVX required)
-- `pyloudnorm` — LUFS measurement (BS.1770-3)
-- `soundfile` — audio file I/O
-- `flask` — REST API server
-- `numba` — optional JIT for compressor/limiter (see Render notes below)
+- `pedalboard` - Audio processing plugins
+- `pyloudnorm` - LUFS measurement (BS.1770-3)
+- `soundfile` - Audio file I/O
+- `flask` - REST API server
+- `numpy` - Signal processing
 
-**Not used:** `pedalboard` — its pre-built binaries require AVX and crash on some Render CPUs.
+## Deploy on Render (Python Web Service)
 
-## Deploying on Render.com
+**Symptom:** Gunicorn workers restart in a loop with `Worker (pid:…) was sent SIGILL!`
 
-Render Standard plan CPUs are usually fine for this engine. The old AVX problem was specifically with **pre-compiled** packages like Pedalboard, which ship AVX-only machine code.
+**Cause:** Render’s default Python is **3.14** (for services created after 2026-02-11). The `pedalboard` native extension is not stable on 3.14 in this environment; workers die as soon as `app.py` imports `dsp_chain` → `pedalboard`.
 
-| Package | Render-safe? | Notes |
-|---------|--------------|-------|
-| numpy / scipy / soundfile | Yes | Standard PyPI wheels, baseline x86-64 |
-| numba | Usually yes | JIT-compiles **on your Render CPU** at runtime |
-| pedalboard | No | Avoid — hard AVX requirement |
+**Fix (do all of these):**
 
-**Recommended Render build command:**
+1. **Pin Python 3.12** — Render does **not** read `runtime.txt`. Use either:
+   - Add `.python-version` at the service root (this repo has `3.12` in `Stemy-backend/.python-version`), or
+   - In the Render dashboard → Environment → set `PYTHON_VERSION` = `3.12.8` (full patch version required for env var).
+2. **Start command** — if Render **Root Directory** is `Stemy-backend`:
+   ```bash
+   cd mastering_engine && gunicorn -c gunicorn.conf.py app:app
+   ```
+   If Root Directory is `mastering_engine`, use:
+   ```bash
+   gunicorn -c gunicorn.conf.py app:app
+   ```
+   Do **not** use `--chdir mastering_engine` with `-c gunicorn.conf.py` from the repo root — Gunicorn looks for the config before changing directory and will fail.
+3. **Build command:**
+   ```bash
+   pip install -r mastering_engine/requirements.txt
+   ```
+4. Redeploy and confirm logs show Python **3.12.x** (not 3.14) and no SIGILL lines.
+
+Point your Node API’s `PYTHON_ENGINE_URL` at this service’s public URL (e.g. `https://stemy-mastering-engine.onrender.com`).
+
+### Upload limit
+
+Maximum upload size is **100 MB** (file bytes on disk). **Track length is not limited** — a 27 MB MP3 can be 30+ minutes.
+
+### Render Standard (2 GB RAM) — recommended
+
+| Setting | Value |
+|---------|--------|
+| Instance | **Standard** (2 GB RAM) |
+| `PYTHON_VERSION` | `3.12.8` |
+| `WEB_CONCURRENCY` | `1` (do not run 2+ workers — concurrent jobs multiply RAM/disk) |
+| `STEMY_MAX_UPLOAD_BYTES` | `104857600` (100 MB) |
+| `STEMY_CHUNK_SECONDS` | `30` (Pedalboard block size in seconds) |
+| `STEMY_TEMP_DIR` | `/tmp/stemy-master` (ephemeral disk for pass temp WAVs) |
+| Start command | `cd mastering_engine && gunicorn -c gunicorn.conf.py app:app` |
+| Remove | `STEMY_MAX_AUDIO_DURATION_SEC` if still set in the dashboard |
+
+Gunicorn **timeout** defaults to **1200 s** (20 min) so long masters are not cut off early.
+
+### Memory model (streaming pipeline)
+
+The mastering engine no longer decodes full tracks into RAM. Processing uses:
+
+1. **Pass 1** — 30 s chunks through EQ / saturation / widen → `pre_lufs` float32 WAV on disk  
+2. **LUFS** — integrated loudness via `numpy.memmap` on `pre_lufs` (paged from disk)  
+3. **Pass 2** — chunked gain / limiter / ceiling → 24-bit PCM WAV (streamed response from disk)
+
+Peak RAM stays roughly **300–500 MB** for 1–2 hour audio; temp disk use scales with duration (~2× PCM size). Temp files are deleted after each request.
+
+**Node API:** uploads use multer `diskStorage` and stream to R2 / Python to avoid keeping three copies of the source in heap.
+
+### 502 on large / long compressed files
+
+With streaming + `WEB_CONCURRENCY=1` on **Standard 2 GB**, typical files under 100 MB (including 1–2 hour MP3/FLAC) should complete. If 502 persists, check logs for disk full (`Insufficient disk space`) or OOM and confirm only one Gunicorn worker is active.
+
+### Quality validation (manual)
 
 ```bash
-pip install -r requirements.txt && pip install -r requirements-speed.txt
+cd mastering_engine
+python dsp_chain.py short.wav pop out.wav
 ```
 
-If numba fails to import or compile on your instance, the engine automatically falls back to a slower CPU-safe path. You can also force the fallback:
-
-```bash
-STEMY_DISABLE_NUMBA=1
-```
-
-### Render memory limits (OOM restarts)
-
-Node and Python run **in the same container** via `start.sh`. A 27 MB MP3 can decode to **30+ minutes** of audio (~600 MB+ in RAM). That can exceed Render memory and cause a silent instance restart mid-job.
-
-Production defaults in `start.sh`:
-
-```bash
-STEMY_DISABLE_NUMBA=1
-MAX_MASTER_DURATION_SEC=900    # 15 minute max per track
-MALLOC_ARENA_MAX=2
-```
-
-On a larger Render instance (4 GB+), increase the limit:
-
-```bash
-MAX_MASTER_DURATION_SEC=1800   # 30 minutes
-```
-
-The worker sends a signed **R2 URL** to Python instead of buffering the file in Node, which cuts Node RAM during mastering.
-
-**What you get without numba:** vectorized limiter + single-pass EQ still run (much faster than the original code). Only the compressor envelope loop stays in plain Python, which is slow on 20–30 minute files.
-
-Check startup logs for one of:
-- `DSP accelerator: numba enabled` — full speed
-- `DSP accelerator: numba disabled via STEMY_DISABLE_NUMBA` — forced safe mode
-- `DSP accelerator: numba not installed` — install `requirements-speed.txt` when ready
+Compare LUFS / true peak headers (or `ab_test.py` helpers) before and after deploy; integrated loudness should be within **±0.2 LU** of the previous full-buffer implementation on the same file.
 
 ## Development
 
@@ -244,8 +261,8 @@ Check startup logs for one of:
 # Run local server
 python app.py
 
-# Run production server
-gunicorn -w 2 -b 0.0.0.0:5050 app:app
+# Run production server (local)
+gunicorn -c gunicorn.conf.py app:app
 
 # Test a single file
 python dsp_chain.py input.wav pop output.wav

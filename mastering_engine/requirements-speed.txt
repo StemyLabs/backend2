@@ -1,4 +1,0 @@
-# Optional speed extras for hosts with modern CPUs (local dev, Render Standard+).
-# Safe to skip on older CPUs — the engine falls back automatically.
--r requirements.txt
-numba>=0.59.0
