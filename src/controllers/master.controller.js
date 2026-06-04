@@ -133,9 +133,11 @@ export const createQuickMaster = async (req, res) => {
     });
     console.log("[QUICK MASTER] Database record created with ID:", master.id);
 
-    console.log("[QUICK MASTER] Enqueuing mastering job...");
-    await enqueueMasteringJob(master.id, file.path, file.originalname);
-    console.log("[QUICK MASTER] Mastering job enqueued (R2 source upload runs with processing)");
+    console.log("[QUICK MASTER] Enqueuing mastering job (async)...");
+    void enqueueMasteringJob(master.id, file.path, file.originalname).catch((err) => {
+      console.error("[QUICK MASTER] enqueueMasteringJob failed:", err?.message || err);
+    });
+    console.log("[QUICK MASTER] Master %s returned QUEUED — client should poll GET /masters/:id", master.id);
 
     return res.status(201).json({ master });
   } catch (error) {
