@@ -36,9 +36,12 @@ TARGET_SEC = float(os.environ.get("STEMY_TARGET_SEC", "90"))
 TURBO_WORKERS = int(os.environ.get("STEMY_TURBO_WORKERS", str(min(6, os.cpu_count() or 4))))
 LUFS_PROBE_SEC = float(os.environ.get("STEMY_LUFS_PROBE_SEC", "90"))
 OUTPUT_EXT = os.environ.get("STEMY_OUTPUT_EXT", ".flac").lower()
+# Tracks longer than this use parallel workers (fast). Shorter tracks use ffmpeg + loudnorm.
+FFMPEG_MAX_DURATION_SEC = float(os.environ.get("STEMY_FFMPEG_MAX_DURATION_SEC", "600"))
 PARALLEL_MAX_DURATION_SEC = float(
-    os.environ.get("STEMY_PARALLEL_MAX_DURATION_SEC", "900")
+    os.environ.get("STEMY_PARALLEL_MAX_DURATION_SEC", "7200")
 )
+FLAC_COMPRESSION = int(os.environ.get("STEMY_FLAC_COMPRESSION", "1"))
 
 
 def _ffmpeg_timeout_for(duration_sec: float) -> int:
@@ -135,10 +138,11 @@ def _master_ffmpeg(
     if out.suffix.lower() != OUTPUT_EXT:
         out = out.with_suffix(OUTPUT_EXT)
 
-    codec = ["-c:a", "flac", "-compression_level", "5"] if OUTPUT_EXT == ".flac" else [
-        "-c:a",
-        "pcm_s24le",
-    ]
+    codec = (
+        ["-c:a", "flac", "-compression_level", str(FLAC_COMPRESSION)]
+        if OUTPUT_EXT == ".flac"
+        else ["-c:a", "pcm_s24le"]
+    )
 
     cmd = [
         ffmpeg,
@@ -317,7 +321,7 @@ def _concat_ffmpeg(segment_paths: list[Path], output_path: Path) -> None:
         list_file.write_text("\n".join(lines), encoding="utf-8")
         out = Path(output_path)
         codec = (
-            ["-c:a", "flac", "-compression_level", "5"]
+            ["-c:a", "flac", "-compression_level", str(FLAC_COMPRESSION)]
             if out.suffix.lower() == ".flac"
             else ["-c:a", "pcm_s24le"]
         )
@@ -411,46 +415,47 @@ def master_turbo(
     genre: str,
 ) -> dict:
     """
-    Master with VPS turbo pipeline (target ≤ STEMY_TARGET_SEC).
-    Writes FLAC (default) or WAV per STEMY_OUTPUT_EXT.
+    Master with VPS turbo pipeline.
+
+    Short/medium (≤ STEMY_FFMPEG_MAX_DURATION_SEC): ffmpeg + loudnorm (~realtime for short clips).
+    Long tracks: parallel Pedalboard segments (avoids loudnorm linear double-pass on full file).
     """
     ensure_temp_dir()
     input_path = Path(input_path)
     output_path = Path(output_path)
     preset = get_preset(genre)
     duration_sec, _, _ = probe_audio_path(input_path)
-    ffmpeg_timeout = _ffmpeg_timeout_for(duration_sec)
+
+    if duration_sec > PARALLEL_MAX_DURATION_SEC:
+        raise RuntimeError(
+            f"Track is {duration_sec / 60:.0f} minutes; max {PARALLEL_MAX_DURATION_SEC / 60:.0f} min."
+        )
+
+    if duration_sec > FFMPEG_MAX_DURATION_SEC:
+        log.info(
+            "Turbo: %.1f min track → parallel workers (ffmpeg loudnorm is slow on long files)",
+            duration_sec / 60,
+        )
+        return _master_parallel(input_path, output_path, genre, preset)
 
     ffmpeg = _ffmpeg_bin()
+    ffmpeg_timeout = _ffmpeg_timeout_for(duration_sec)
     if ffmpeg:
         try:
             return _master_ffmpeg(
                 input_path, output_path, preset, timeout_sec=ffmpeg_timeout
             )
-        except subprocess.TimeoutExpired as exc:
+        except subprocess.TimeoutExpired:
             log.warning(
-                "ffmpeg timed out after %ds for %.1f min track",
+                "ffmpeg timed out after %ds for %.1f min track — parallel fallback",
                 ffmpeg_timeout,
                 duration_sec / 60,
             )
-            raise RuntimeError(
-                f"Mastering timed out after {ffmpeg_timeout}s. "
-                f"For {duration_sec / 60:.0f} min tracks set STEMY_FFMPEG_TIMEOUT_SEC higher "
-                f"(e.g. {min(900, int(duration_sec * 0.35 + 120))})."
-            ) from exc
         except Exception as exc:
-            if duration_sec > PARALLEL_MAX_DURATION_SEC:
-                raise RuntimeError(f"ffmpeg failed for long track: {exc}") from exc
             log.warning("ffmpeg turbo failed (%s), trying parallel fallback", exc)
     else:
         log.warning(
             "ffmpeg not found on PATH — install ffmpeg for fast turbo (apt install ffmpeg)",
-        )
-
-    if duration_sec > PARALLEL_MAX_DURATION_SEC:
-        raise RuntimeError(
-            f"Track is {duration_sec / 60:.0f} minutes; parallel fallback is disabled. "
-            "Install ffmpeg and use STEMY_FFMPEG_TIMEOUT_SEC for long files."
         )
 
     return _master_parallel(input_path, output_path, genre, preset)
