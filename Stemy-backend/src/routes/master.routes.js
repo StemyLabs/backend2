@@ -1,9 +1,7 @@
 import express from "express";
 import multer from "multer";
-import fs from "fs";
-import os from "os";
-import path from "path";
 import { authMiddleware } from "../middleware/auth.middleware.js";
+import { MASTER_TMP_DIR } from "../utils/master-temp.js";
 import {
   createQuickMaster,
   listMasters,
@@ -11,13 +9,10 @@ import {
   getMasterDownload,
 } from "../controllers/master.controller.js";
 
-const UPLOAD_DIR = path.join(os.tmpdir(), "stemy-uploads");
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
 const router = express.Router();
 const upload = multer({
   storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+    destination: (_req, _file, cb) => cb(null, MASTER_TMP_DIR),
     filename: (_req, file, cb) => {
       const safe = file.originalname.replace(/[^\w.\-]+/g, "_");
       cb(null, `${Date.now()}-${safe}`);

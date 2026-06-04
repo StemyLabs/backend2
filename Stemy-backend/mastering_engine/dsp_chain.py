@@ -272,6 +272,7 @@ def _pass2_stream(
     output_path: Path,
     preset: dict,
     *,
+    measured_lufs: float,
     gain_needed: float,
     target_tp_db: float,
 ) -> tuple[float, float, float, float]:
@@ -285,59 +286,60 @@ def _pass2_stream(
     gain_lin = _db_to_lin(gain_needed)
     hard_ceil = _db_to_lin(target_tp_db - 0.05)
 
-    post_float_path = temp_path("_post.wav")
     sample_count = 0
+    peak_max = 0.0
+    rms_sum = 0.0
     first = True
 
-    try:
-        with open_pre_lufs_writer(post_float_path) as float_writer, sf.SoundFile(
-            str(output_path),
-            mode="w",
-            samplerate=TARGET_SR,
-            channels=2,
-            format="WAV",
-            subtype="PCM_24",
-        ) as pcm_writer:
-            for chunk in iter_soundfile_chunks(pre_lufs_path, TARGET_SR):
-                chunk = chunk * gain_lin
-                chunk_cf = samples_to_channels_first(chunk)
-                chunk_cf = _process_board_chunk(
-                    limiter, chunk_cf, TARGET_SR, reset=first
-                )
-                first = False
-                chunk = channels_first_to_samples(chunk_cf)
+    with sf.SoundFile(
+        str(output_path),
+        mode="w",
+        samplerate=TARGET_SR,
+        channels=2,
+        format="WAV",
+        subtype="PCM_24",
+    ) as pcm_writer:
+        for chunk in iter_soundfile_chunks(pre_lufs_path, TARGET_SR):
+            chunk = chunk * gain_lin
+            chunk_cf = samples_to_channels_first(chunk)
+            chunk_cf = _process_board_chunk(
+                limiter, chunk_cf, TARGET_SR, reset=first
+            )
+            first = False
+            chunk = channels_first_to_samples(chunk_cf)
 
-                peak = float(np.max(np.abs(chunk)))
-                if peak > hard_ceil:
-                    chunk = chunk * (hard_ceil / peak)
+            peak = float(np.max(np.abs(chunk)))
+            peak_max = max(peak_max, peak)
+            if peak > hard_ceil:
+                chunk = chunk * (hard_ceil / peak)
+                peak_max = min(peak_max, hard_ceil)
 
-                sample_count += len(chunk)
-                float_writer.write(chunk)
-                pcm_writer.write(chunk)
+            rms_sum += float(np.mean(chunk ** 2)) * len(chunk)
+            sample_count += len(chunk)
+            pcm_writer.write(chunk)
 
-            tail = _flush_board(limiter, TARGET_SR)
-            if tail is not None and tail.size > 0:
-                chunk = channels_first_to_samples(tail)
-                peak = float(np.max(np.abs(chunk)))
-                if peak > hard_ceil:
-                    chunk = chunk * (hard_ceil / peak)
-                sample_count += len(chunk)
-                float_writer.write(chunk)
-                pcm_writer.write(chunk)
+        tail = _flush_board(limiter, TARGET_SR)
+        if tail is not None and tail.size > 0:
+            chunk = channels_first_to_samples(tail)
+            peak = float(np.max(np.abs(chunk)))
+            peak_max = max(peak_max, peak)
+            if peak > hard_ceil:
+                chunk = chunk * (hard_ceil / peak)
+            rms_sum += float(np.mean(chunk ** 2)) * len(chunk)
+            sample_count += len(chunk)
+            pcm_writer.write(chunk)
 
-        duration = sample_count / TARGET_SR if TARGET_SR else 0.0
-        audio_mmap = mmap_stereo_wav(post_float_path, subtype="FLOAT")
-        try:
-            final_lufs = _lufs(audio_mmap, TARGET_SR)
-            final_tp = _true_peak_db(audio_mmap)
-            final_dr = _dynamic_range(audio_mmap)
-        finally:
-            del audio_mmap
-            gc.collect()
+    duration = sample_count / TARGET_SR if TARGET_SR else 0.0
+    final_tp = _lin_to_db(peak_max) if peak_max > 1e-6 else -120.0
+    rms = (rms_sum / max(sample_count, 1)) ** 0.5
+    rms_db = 20 * np.log10(rms) if rms > 1e-6 else -120.0
+    final_dr = max(0.0, final_tp - rms_db)
+    if np.isfinite(measured_lufs) and measured_lufs > -70:
+        final_lufs = float(np.clip(measured_lufs + gain_needed, -70.0, 0.0))
+    else:
+        final_lufs = -14.0
 
-        return final_lufs, final_tp, final_dr, duration
-    finally:
-        safe_unlink(post_float_path)
+    return final_lufs, final_tp, final_dr, duration
 
 
 # ─────────────────────────── metadata embedding ─────────────────────────────
@@ -572,6 +574,7 @@ def master_audio_file(
             pre_lufs_path,
             output_path,
             preset,
+            measured_lufs=measured_lufs,
             gain_needed=gain_needed,
             target_tp_db=target_tp_db,
         )

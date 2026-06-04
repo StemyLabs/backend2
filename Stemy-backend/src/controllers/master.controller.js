@@ -102,28 +102,7 @@ export const createQuickMaster = async (req, res) => {
       console.log("[QUICK MASTER] Artwork uploaded to:", artUrl);
     }
 
-    console.log("[QUICK MASTER] Uploading source to storage...");
-    const sourceKey = `masters/${req.userId}/${Date.now()}-${file.originalname}`;
-    const contentType = file.mimetype || "application/octet-stream";
-    let sourceUrl;
-    if (file.path) {
-      const stat = await fsp.stat(file.path);
-      sourceUrl = await uploadStream({
-        key: sourceKey,
-        stream: fs.createReadStream(file.path),
-        contentType,
-        contentLength: stat.size,
-      });
-    } else {
-      sourceUrl = await uploadBuffer({
-        key: sourceKey,
-        body: file.buffer,
-        contentType,
-      });
-    }
-    console.log("[QUICK MASTER] Source uploaded to:", sourceUrl);
-
-    console.log("[QUICK MASTER] Creating database record...");
+    console.log("[QUICK MASTER] Creating database record (source R2 upload deferred)...");
     const master = await prisma.master.create({
       data: {
         userId: req.userId,
@@ -132,7 +111,7 @@ export const createQuickMaster = async (req, res) => {
         sourceName: file.originalname,
         sourceMime: file.mimetype || "application/octet-stream",
         sourceSize: file.size,
-        sourceUrl,
+        sourceUrl: `local://pending/${req.userId}`,
         metadata: parsedMetadata,
       },
     });
@@ -140,13 +119,7 @@ export const createQuickMaster = async (req, res) => {
 
     console.log("[QUICK MASTER] Enqueuing mastering job...");
     await enqueueMasteringJob(master.id, file.path || null);
-    console.log("[QUICK MASTER] Mastering job enqueued successfully");
-
-    if (file.path) {
-      await fsp.unlink(file.path).catch((err) => {
-        console.warn("[QUICK MASTER] Failed to remove multer temp:", err.message);
-      });
-    }
+    console.log("[QUICK MASTER] Mastering job enqueued (R2 source upload runs with processing)");
 
     return res.status(201).json({ master });
   } catch (error) {

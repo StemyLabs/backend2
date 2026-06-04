@@ -28,7 +28,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from flask import Flask, after_this_request, jsonify, request, send_file, abort
+from flask import Flask, jsonify, request, send_file, abort
 from flask_cors import CORS
 
 from genres import GENRES, DEFAULT_GENRE, get_preset
@@ -254,17 +254,13 @@ def master():
     stem = Path(f.filename).stem
     download_name = f"{stem}_mastered_{genre}.wav"
 
-    @after_this_request
-    def _cleanup(response):
-        safe_unlink(out_path)
-        return response
-
     response = send_file(
         out_path,
         mimetype="audio/wav",
         as_attachment=True,
         download_name=download_name,
     )
+    response.call_on_close(lambda: safe_unlink(out_path))
     response.headers.update({
         **_cors_headers(),
         "X-Genre":               genre,
