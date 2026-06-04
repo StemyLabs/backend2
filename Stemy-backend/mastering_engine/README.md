@@ -221,16 +221,39 @@ Maximum upload size is **100 MB** (file bytes on disk). **Track length is not li
 |---------|--------|
 | Instance | **Standard** (2 GB RAM) |
 | `PYTHON_VERSION` | `3.12.8` |
-| `WEB_CONCURRENCY` | `1` (do not run 2+ workers — each job decodes full PCM) |
+| `WEB_CONCURRENCY` | `1` (do not run 2+ workers — concurrent jobs multiply RAM/disk) |
 | `STEMY_MAX_UPLOAD_BYTES` | `104857600` (100 MB) |
+| `STEMY_CHUNK_SECONDS` | `30` (Pedalboard block size in seconds) |
+| `STEMY_TEMP_DIR` | `/tmp/stemy-master` (ephemeral disk for pass temp WAVs) |
 | Start command | `cd mastering_engine && gunicorn -c gunicorn.conf.py app:app` |
 | Remove | `STEMY_MAX_AUDIO_DURATION_SEC` if still set in the dashboard |
 
 Gunicorn **timeout** defaults to **1200 s** (20 min) so long masters are not cut off early.
 
+### Memory model (streaming pipeline)
+
+The mastering engine no longer decodes full tracks into RAM. Processing uses:
+
+1. **Pass 1** — 30 s chunks through EQ / saturation / widen → `pre_lufs` float32 WAV on disk  
+2. **LUFS** — integrated loudness via `numpy.memmap` on `pre_lufs` (paged from disk)  
+3. **Pass 2** — chunked gain / limiter / ceiling → 24-bit PCM WAV (streamed response from disk)
+
+Peak RAM stays roughly **300–500 MB** for 1–2 hour audio; temp disk use scales with duration (~2× PCM size). Temp files are deleted after each request.
+
+**Node API:** uploads use multer `diskStorage` and stream to R2 / Python to avoid keeping three copies of the source in heap.
+
 ### 502 on large / long compressed files
 
-Still possible if RAM is exhausted (e.g. **Starter 512 MB** with a 30-minute MP3). **Standard 2 GB** should handle typical files under 100 MB. If 502 persists, check logs for OOM and keep `WEB_CONCURRENCY=1`.
+With streaming + `WEB_CONCURRENCY=1` on **Standard 2 GB**, typical files under 100 MB (including 1–2 hour MP3/FLAC) should complete. If 502 persists, check logs for disk full (`Insufficient disk space`) or OOM and confirm only one Gunicorn worker is active.
+
+### Quality validation (manual)
+
+```bash
+cd mastering_engine
+python dsp_chain.py short.wav pop out.wav
+```
+
+Compare LUFS / true peak headers (or `ab_test.py` helpers) before and after deploy; integrated loudness should be within **±0.2 LU** of the previous full-buffer implementation on the same file.
 
 ## Development
 

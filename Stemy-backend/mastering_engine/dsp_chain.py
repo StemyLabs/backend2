@@ -1,20 +1,10 @@
 """
 dsp_chain.py – Server-side mastering DSP using pedalboard + pyloudnorm.
 
-Full chain (matches the frontend Web Audio graph):
-  1. High-Pass Filter        (removes sub-sonic rumble)
-  2. 4-Band EQ               (LowShelf · MidDip · Presence · AirShelf)
-  3. Saturation              (soft-clip harmonic warmth)
-  4. Bus Compressor          (glue / dynamics control)
-  5. Stereo Widener          (Mid/Side width expansion)
-  6. Brickwall Limiter       (true-peak ceiling at -1 dBTP)
-  7. LUFS normalisation      (integrated target: -14 LUFS, streaming standard)
-
-Output spec:
-  • Sample rate : 44 100 Hz
-  • Bit depth   : 24-bit PCM WAV
-  • Integrated  : -14 LUFS  (±0.3 LU tolerance)
-  • True peak   : -1.0 dBTP (hard ceiling)
+Streaming / disk-backed pipeline for low RAM (Render 2 GB):
+  Pass 1: chunked EQ → saturation → widen → pre_lufs.wav
+  LUFS measure via memmap (BS.1770 integrated)
+  Pass 2: chunked gain → limiter → ceiling → 24-bit PCM WAV
 """
 
 from __future__ import annotations
@@ -32,7 +22,6 @@ import numpy as np
 import soundfile as sf
 import pyloudnorm as pyln
 
-# Suppress noisy pedalboard resampling warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pedalboard")
 
 try:
@@ -52,28 +41,41 @@ except ImportError as e:
     _PEDALBOARD_ERROR = str(e)
 
 from genres import get_preset, DEFAULT_GENRE
+from io_stream import (
+    CHUNK_SECONDS,
+    TARGET_SR as IO_TARGET_SR,
+    check_disk_space,
+    channels_first_to_samples,
+    ensure_temp_dir,
+    iter_pedalboard_chunks,
+    iter_soundfile_chunks,
+    mmap_stereo_wav,
+    normalize_to_stereo_channels_first,
+    open_pedalboard_input,
+    open_pre_lufs_writer,
+    probe_audio_path,
+    safe_unlink,
+    samples_to_channels_first,
+    temp_path,
+    write_bytes_to_temp,
+)
 
 log = logging.getLogger(__name__)
 
-# ─────────────────────────── constants ──────────────────────────────────────
-TARGET_SR       = 44_100          # output sample rate (Hz)
-TARGET_BITS     = 24              # output bit depth
-TARGET_LUFS     = -14.0          # integrated loudness target
-TARGET_TP_DB    = -1.0           # true-peak ceiling (dBTP)
-MAX_GAIN_DB     = 30.0           # safety: never boost by more than this
+TARGET_SR = IO_TARGET_SR
+TARGET_BITS = 24
+TARGET_LUFS = -14.0
+TARGET_TP_DB = -1.0
+MAX_GAIN_DB = 30.0
 
-# Upload cap only (matches Node API + Flask MAX_CONTENT_LENGTH). No duration limit.
 MAX_UPLOAD_BYTES = int(
     os.environ.get("STEMY_MAX_UPLOAD_BYTES", str(100 * 1024 * 1024))
 )
 
 
-
-
 # ─────────────────────────── helpers ────────────────────────────────────────
 
 def _guess_image_mime(data: bytes) -> str:
-    """Detect JPEG vs PNG from magic bytes for RIFF PICT chunk."""
     if len(data) < 4:
         return "image/jpeg"
     if data[:4] == b"\x89PNG":
@@ -92,7 +94,6 @@ def _lin_to_db(lin: float) -> float:
 
 
 def _probe_audio(input_bytes: bytes) -> tuple[float, int, int]:
-    """Return (duration_sec, sample_rate, channels) without decoding PCM."""
     with io.BytesIO(input_bytes) as buf:
         with sf.SoundFile(buf) as f:
             frames = len(f)
@@ -103,24 +104,240 @@ def _probe_audio(input_bytes: bytes) -> tuple[float, int, int]:
     return frames / sr, sr, ch
 
 
-def _check_upload_size(input_bytes: bytes) -> None:
-    file_mb = len(input_bytes) / (1024 * 1024)
+def _check_upload_size(size_bytes: int) -> None:
+    file_mb = size_bytes / (1024 * 1024)
     max_mb = MAX_UPLOAD_BYTES / (1024 * 1024)
-    if len(input_bytes) > MAX_UPLOAD_BYTES:
+    if size_bytes > MAX_UPLOAD_BYTES:
         raise ValueError(
             f"File is {file_mb:.1f} MB; maximum upload size is {max_mb:.0f} MB."
         )
 
 
 def _ensure_stereo(audio: np.ndarray) -> np.ndarray:
-    """Return (N, 2) float32 array regardless of input channel count."""
     if audio.ndim == 1:
         audio = np.stack([audio, audio], axis=-1)
     elif audio.shape[1] == 1:
         audio = np.concatenate([audio, audio], axis=-1)
     elif audio.shape[1] > 2:
-        audio = audio[:, :2]          # take first two channels
+        audio = audio[:, :2]
     return audio.astype(np.float32)
+
+
+def _build_eq_board(preset: dict) -> tuple[Pedalboard, dict]:
+    comp_cfg = preset["comp"]
+    board = Pedalboard([
+        HighpassFilter(cutoff_frequency_hz=preset["hpf_hz"]),
+        LowShelfFilter(
+            cutoff_frequency_hz=preset["low_shelf"]["freq_hz"],
+            gain_db=preset["low_shelf"]["gain_db"],
+        ),
+        PeakFilter(
+            cutoff_frequency_hz=preset["mid_dip"]["freq_hz"],
+            gain_db=preset["mid_dip"]["gain_db"],
+            q=preset["mid_dip"]["q"],
+        ),
+        PeakFilter(
+            cutoff_frequency_hz=preset["presence"]["freq_hz"],
+            gain_db=preset["presence"]["gain_db"],
+            q=preset["presence"]["q"],
+        ),
+        HighShelfFilter(
+            cutoff_frequency_hz=preset["air_shelf"]["freq_hz"],
+            gain_db=preset["air_shelf"]["gain_db"],
+        ),
+        Compressor(
+            threshold_db=comp_cfg["threshold_db"],
+            ratio=comp_cfg["ratio"],
+            attack_ms=comp_cfg["attack_ms"],
+            release_ms=comp_cfg["release_ms"],
+        ),
+    ])
+    return board, comp_cfg
+
+
+def _process_board_chunk(
+    board: Pedalboard,
+    chunk_cf: np.ndarray,
+    sr: int,
+    *,
+    reset: bool,
+) -> np.ndarray:
+    chunk_cf = normalize_to_stereo_channels_first(chunk_cf)
+    out = board.process(chunk_cf, sample_rate=sr, reset=reset)
+    return np.asarray(out, dtype=np.float32)
+
+
+def _flush_board(board: Pedalboard, sr: int) -> np.ndarray | None:
+    """Drain plugin tails after chunked processing."""
+    try:
+        tail = board.process(
+            np.zeros((2, 1), dtype=np.float32),
+            sample_rate=sr,
+            reset=True,
+        )
+        if tail is not None and np.asarray(tail).size > 0:
+            return np.asarray(tail, dtype=np.float32)
+    except Exception:
+        pass
+    return None
+
+
+def _normalize_input_to_44k(input_path: Path) -> Path:
+    """Fallback: chunked soundfile read + resample to 44.1 kHz stereo float WAV."""
+    out = temp_path("_norm.wav")
+    _, src_sr, _ = probe_audio_path(input_path)
+    resample_board = Pedalboard([Resample(target_sample_rate=TARGET_SR)])
+    block = max(1, CHUNK_SECONDS * src_sr)
+    with sf.SoundFile(str(input_path)) as inf:
+        with open_pre_lufs_writer(out) as outf:
+            while inf.tell() < inf.frames:
+                data = inf.read(block, dtype="float32", always_2d=True)
+                if data is None or len(data) == 0:
+                    break
+                data = _ensure_stereo(data)
+                if src_sr != TARGET_SR:
+                    data = _process_board_chunk(
+                        resample_board, data.T, src_sr, reset=False
+                    ).T
+                outf.write(data)
+    return out
+
+
+def _pass1_stream(
+    input_path: Path,
+    pre_lufs_path: Path,
+    preset: dict,
+) -> float:
+    """Stream input → pre_lufs float32 WAV. Returns input duration in seconds."""
+    board, comp_cfg = _build_eq_board(preset)
+    makeup = _db_to_lin(comp_cfg.get("makeup_db", 0.0))
+    sat_drive = preset["saturation_drive"]
+    width = preset.get("width", 1.0)
+
+    normalized_path: Path | None = None
+    try:
+        audio_in = None
+        try:
+            audio_in, sr = open_pedalboard_input(input_path)
+            chunk_iter = iter_pedalboard_chunks(audio_in, sr)
+            input_dur = audio_in.frames / sr
+            log.info("Input via AudioFile @ %d Hz, %.2f s", sr, input_dur)
+        except Exception as exc:
+            log.warning("AudioFile open failed (%s), using soundfile fallback", exc)
+            normalized_path = _normalize_input_to_44k(input_path)
+            sr = TARGET_SR
+            _, _, _ = probe_audio_path(normalized_path)
+            with sf.SoundFile(str(normalized_path)) as nf:
+                input_dur = len(nf) / sr
+            chunk_iter = (
+                samples_to_channels_first(_ensure_stereo(c))
+                for c in iter_soundfile_chunks(normalized_path, sr)
+            )
+
+        with open_pre_lufs_writer(pre_lufs_path) as writer:
+            first = True
+            for chunk_cf in chunk_iter:
+                chunk_cf = normalize_to_stereo_channels_first(chunk_cf)
+                effected = _process_board_chunk(
+                    board, chunk_cf, sr, reset=first
+                )
+                first = False
+                effected *= makeup
+                samples = channels_first_to_samples(effected)
+                samples = _soft_clip_saturation(samples, sat_drive)
+                samples = _ms_widen(samples, width)
+                writer.write(samples)
+
+            tail = _flush_board(board, sr)
+            if tail is not None and tail.size > 0:
+                tail = normalize_to_stereo_channels_first(tail) * makeup
+                samples = _ms_widen(
+                    _soft_clip_saturation(channels_first_to_samples(tail), sat_drive),
+                    width,
+                )
+                writer.write(samples)
+
+        return input_dur
+    finally:
+        if audio_in is not None:
+            try:
+                audio_in.close()
+            except Exception:
+                pass
+        safe_unlink(normalized_path)
+
+
+def _pass2_stream(
+    pre_lufs_path: Path,
+    output_path: Path,
+    preset: dict,
+    *,
+    gain_needed: float,
+    target_tp_db: float,
+) -> tuple[float, float, float, float]:
+    """Apply LUFS gain, limiter, ceiling; write PCM_24 WAV. Return (lufs, tp, dr, duration)."""
+    limiter = Pedalboard([
+        Limiter(
+            threshold_db=preset["limiter"]["threshold_db"],
+            release_ms=preset["limiter"]["release_ms"],
+        )
+    ])
+    gain_lin = _db_to_lin(gain_needed)
+    hard_ceil = _db_to_lin(target_tp_db - 0.05)
+
+    post_float_path = temp_path("_post.wav")
+    sample_count = 0
+    first = True
+
+    try:
+        with open_pre_lufs_writer(post_float_path) as float_writer, sf.SoundFile(
+            str(output_path),
+            mode="w",
+            samplerate=TARGET_SR,
+            channels=2,
+            format="WAV",
+            subtype="PCM_24",
+        ) as pcm_writer:
+            for chunk in iter_soundfile_chunks(pre_lufs_path, TARGET_SR):
+                chunk = chunk * gain_lin
+                chunk_cf = samples_to_channels_first(chunk)
+                chunk_cf = _process_board_chunk(
+                    limiter, chunk_cf, TARGET_SR, reset=first
+                )
+                first = False
+                chunk = channels_first_to_samples(chunk_cf)
+
+                peak = float(np.max(np.abs(chunk)))
+                if peak > hard_ceil:
+                    chunk = chunk * (hard_ceil / peak)
+
+                sample_count += len(chunk)
+                float_writer.write(chunk)
+                pcm_writer.write(chunk)
+
+            tail = _flush_board(limiter, TARGET_SR)
+            if tail is not None and tail.size > 0:
+                chunk = channels_first_to_samples(tail)
+                peak = float(np.max(np.abs(chunk)))
+                if peak > hard_ceil:
+                    chunk = chunk * (hard_ceil / peak)
+                sample_count += len(chunk)
+                float_writer.write(chunk)
+                pcm_writer.write(chunk)
+
+        duration = sample_count / TARGET_SR if TARGET_SR else 0.0
+        audio_mmap = mmap_stereo_wav(post_float_path, subtype="FLOAT")
+        try:
+            final_lufs = _lufs(audio_mmap, TARGET_SR)
+            final_tp = _true_peak_db(audio_mmap)
+            final_dr = _dynamic_range(audio_mmap)
+        finally:
+            del audio_mmap
+            gc.collect()
+
+        return final_lufs, final_tp, final_dr, duration
+    finally:
+        safe_unlink(post_float_path)
 
 
 # ─────────────────────────── metadata embedding ─────────────────────────────
@@ -130,19 +347,11 @@ def _embed_riff_metadata(
     metadata: dict | None = None,
     artwork_bytes: bytes | None = None,
 ) -> bytes:
-    """
-    Embed metadata as RIFF LIST/INFO chunks + optional PICT cover art block
-    in a WAV byte stream.
-    Recognised by Windows File Explorer, VLC, foobar2000, and most media players.
-    """
     if (not metadata and not artwork_bytes) or len(wav_bytes) < 12:
         return wav_bytes
-
     if wav_bytes[:4] != b"RIFF" or wav_bytes[8:12] != b"WAVE":
         return wav_bytes
-
     try:
-        # ── Build LIST/INFO payload (text tags) ──────────────────────────
         info_payload = b""
         if metadata:
             chunk_map = {
@@ -166,77 +375,91 @@ def _embed_riff_metadata(
                     raw += b"\x00"
                 info_payload += ck_id.encode() + struct.pack("<I", len(raw)) + raw
 
-        chunks_to_insert = []  # (position-key, raw-chunk-bytes)
-
+        chunks_to_insert = []
         if info_payload:
             list_body = b"INFO" + info_payload
             if len(list_body) % 2:
                 list_body += b"\x00"
-            chunks_to_insert.append(("before_data", b"LIST" + struct.pack("<I", len(list_body)) + list_body))
-
-        # ── Build PICT chunk (cover art) ─────────────────────────────────
+            chunks_to_insert.append(
+                b"LIST" + struct.pack("<I", len(list_body)) + list_body
+            )
         if artwork_bytes:
             mime_type = _guess_image_mime(artwork_bytes)
-            # PICT chunk: 4-byte MIME hint + raw image data
             mime_bytes = mime_type.encode("utf-8") + b"\x00"
             if len(mime_bytes) % 2:
                 mime_bytes += b"\x00"
             pict_data = mime_bytes + artwork_bytes
             if len(pict_data) % 2:
                 pict_data += b"\x00"
-            chunks_to_insert.append(("before_data", b"PICT" + struct.pack("<I", len(pict_data)) + pict_data))
-
+            chunks_to_insert.append(
+                b"PICT" + struct.pack("<I", len(pict_data)) + pict_data
+            )
         if not chunks_to_insert:
             return wav_bytes
 
-        # ── Walk existing chunks and insert new ones before "data" ──────
         pos = 12
         out = bytearray(wav_bytes[:12])
-
         while pos + 8 <= len(wav_bytes):
-            ck_id = wav_bytes[pos:pos+4]
-            ck_sz = struct.unpack("<I", wav_bytes[pos+4:pos+8])[0]
+            ck_id = wav_bytes[pos : pos + 4]
+            ck_sz = struct.unpack("<I", wav_bytes[pos + 4 : pos + 8])[0]
             ck_end = pos + 8 + ck_sz
             if ck_sz % 2:
                 ck_end += 1
-
             if ck_id == b"data":
-                for _, chunk_bytes in chunks_to_insert:
+                for chunk_bytes in chunks_to_insert:
                     out.extend(chunk_bytes)
-
             out.extend(wav_bytes[pos:ck_end])
             pos = ck_end
-
-        # Patch RIFF file-size field
         riff_size = len(out) - 8
         out[4:8] = struct.pack("<I", riff_size)
         return bytes(out)
-
     except Exception as exc:
         log.warning("Failed to embed RIFF metadata: %s", exc)
         return wav_bytes
 
 
+def _embed_riff_metadata_file(
+    wav_path: Path,
+    metadata: dict | None = None,
+    artwork_bytes: bytes | None = None,
+) -> None:
+    """Embed metadata; loads file only when under STEMY_METADATA_MAX_BYTES."""
+    if not metadata and not artwork_bytes:
+        return
+    max_embed = int(os.environ.get("STEMY_METADATA_MAX_BYTES", str(200 * 1024 * 1024)))
+    size = wav_path.stat().st_size
+    if size > max_embed:
+        log.warning(
+            "Skipping RIFF metadata embed for %.1f MB output (limit %.1f MB)",
+            size / 1e6,
+            max_embed / 1e6,
+        )
+        return
+    data = wav_path.read_bytes()
+    embedded = _embed_riff_metadata(data, metadata, artwork_bytes)
+    if embedded is not data:
+        wav_path.write_bytes(embedded)
+    del data
+
+
 def _true_peak_db(audio: np.ndarray) -> float:
-    """True-peak via 2× linear interpolation (fast, ~90% accuracy vs full 4×)."""
     peak = float(np.max(np.abs(audio)))
     if peak < 0.001:
         return -120.0
+    if audio.ndim == 1:
+        return _lin_to_db(peak)
     interp = np.max(np.abs(0.5 * (audio[:-1] + audio[1:])))
-    return _lin_to_db(max(peak, interp))
+    return _lin_to_db(max(peak, float(np.max(np.abs(interp)))))
 
 
 def _lufs(audio: np.ndarray, sr: int) -> float:
-    """BS.1770-3 integrated loudness in LUFS."""
     meter = pyln.Meter(sr)
-    return meter.integrated_loudness(audio.astype(np.float64))
+    if isinstance(audio, np.memmap):
+        return meter.integrated_loudness(audio)
+    return meter.integrated_loudness(np.asarray(audio, dtype=np.float64))
 
 
 def _dynamic_range(audio: np.ndarray) -> float:
-    """
-    Dynamic range in dB (difference between peak and RMS floor).
-    Simple measurement: peak dB - RMS dB.
-    """
     rms = np.sqrt(np.mean(audio ** 2))
     if rms < 1e-6:
         return 0.0
@@ -245,76 +468,141 @@ def _dynamic_range(audio: np.ndarray) -> float:
     return max(0, peak_db - rms_db)
 
 
-# ─────────────────────────── Mid/Side widener ───────────────────────────────
-
 def _ms_widen(audio: np.ndarray, width: float) -> np.ndarray:
-    """
-    Mid/Side stereo widener.
-    width = 1.0 → no change
-    width = 1.5 → 50% wider side channel
-    width = 2.0 → double the side channel (very wide)
-
-    Keeps overall level constant by normalising against original RMS.
-    """
     if width <= 0 or abs(width - 1.0) < 1e-3:
         return audio
-
     L = audio[:, 0]
     R = audio[:, 1]
-
-    mid  = (L + R) * 0.5
+    mid = (L + R) * 0.5
     side = (L - R) * 0.5
-
-    # Scale the side signal
     side_scaled = side * width
-
-    # Recombine
     L_out = mid + side_scaled
     R_out = mid - side_scaled
-
     out = np.stack([L_out, R_out], axis=-1)
+    rms_in = float(np.sqrt(np.mean(audio ** 2))) + 1e-9
+    rms_out = float(np.sqrt(np.mean(out ** 2))) + 1e-9
+    return (out * (rms_in / rms_out)).astype(np.float32)
 
-    # Loudness-preserve: match RMS of input
-    rms_in  = float(np.sqrt(np.mean(audio ** 2))) + 1e-9
-    rms_out = float(np.sqrt(np.mean(out  ** 2))) + 1e-9
-    out = out * (rms_in / rms_out)
-
-    return out.astype(np.float32)
-
-
-# ─────────────────────────── soft-clip saturation ───────────────────────────
 
 def _soft_clip_saturation(audio: np.ndarray, drive: float) -> np.ndarray:
-    """
-    Mastering-grade soft-clip saturation.
-    Mirrors the Web Audio WaveShaper in main.js:
-        shaped = x - (k/3) * x³    (soft cubic)
-        output = tanh(shaped * 1.1) / tanh(1.1)
-
-    drive: 0.0 = bypass, 1.0 = heavy saturation
-    For mastering use 0.05-0.4; values in genre presets are already sane.
-    """
     k = float(np.clip(drive, 0.0, 1.5))
     if k < 1e-4:
         return audio
-
-    # Pre-gain to push into the curve
-    pre  = audio * (1.0 + k * 0.5)
+    pre = audio * (1.0 + k * 0.5)
     shaped = pre - (k / 3.0) * pre ** 3
-
-    # tanh soft-clip to prevent overshoot
     normaliser = float(np.tanh(1.1))
     out = np.tanh(shaped * 1.1) / normaliser
-
-    # Compensate output level (saturation adds apparent loudness)
-    rms_in  = float(np.sqrt(np.mean(audio ** 2))) + 1e-9
-    rms_out = float(np.sqrt(np.mean(out   ** 2))) + 1e-9
-    out = out * (rms_in / rms_out)
-
-    return out.astype(np.float32)
+    rms_in = float(np.sqrt(np.mean(audio ** 2))) + 1e-9
+    rms_out = float(np.sqrt(np.mean(out ** 2))) + 1e-9
+    return (out * (rms_in / rms_out)).astype(np.float32)
 
 
-# ─────────────────────────── main mastering function ────────────────────────
+# ─────────────────────────── public API ─────────────────────────────────────
+
+def master_audio_file(
+    input_path: Path | str,
+    output_path: Path | str,
+    genre: str = DEFAULT_GENRE,
+    *,
+    target_lufs: float = TARGET_LUFS,
+    target_tp_db: float = TARGET_TP_DB,
+    metadata: dict | None = None,
+    artwork_bytes: bytes | None = None,
+) -> dict:
+    """
+    Master from disk paths; writes 24-bit PCM WAV to output_path.
+    Returns analysis dict (same keys as master_audio).
+    """
+    if not PEDALBOARD_AVAILABLE:
+        raise RuntimeError(
+            f"pedalboard is not installed: {_PEDALBOARD_ERROR}. "
+            "Run: pip install pedalboard"
+        )
+
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    ensure_temp_dir()
+
+    t0 = time.perf_counter()
+    size_bytes = input_path.stat().st_size
+    _check_upload_size(size_bytes)
+
+    duration_sec, src_sr, channels = probe_audio_path(input_path)
+    check_disk_space(duration_sec)
+
+    preset = get_preset(genre)
+    target_lufs = preset.get("target_lufs", target_lufs)
+    target_tp_db = preset.get("target_tp_db", target_tp_db)
+
+    log.info(
+        "Mastering — genre=%s target_lufs=%.1f target_tp=%.1f (%.2f s, %d Hz, %d ch, %.1f MB)",
+        genre,
+        target_lufs,
+        target_tp_db,
+        duration_sec,
+        src_sr,
+        channels,
+        size_bytes / (1024 * 1024),
+    )
+
+    pre_lufs_path = temp_path("_pre.wav")
+    try:
+        t1 = time.perf_counter()
+        input_dur = _pass1_stream(input_path, pre_lufs_path, preset)
+        log.info("Pass 1 (DSP): %.1fs", time.perf_counter() - t1)
+
+        gc.collect()
+
+        t2 = time.perf_counter()
+        audio_mmap = mmap_stereo_wav(pre_lufs_path, subtype="FLOAT")
+        try:
+            measured_lufs = _lufs(audio_mmap, TARGET_SR)
+        finally:
+            del audio_mmap
+            gc.collect()
+        gain_needed = 0.0
+        if np.isfinite(measured_lufs) and measured_lufs > -70:
+            gain_needed = float(
+                np.clip(target_lufs - measured_lufs, -MAX_GAIN_DB, MAX_GAIN_DB)
+            )
+        log.info("LUFS measure: %.2f → gain %.2f dB (%.1fs)", measured_lufs, gain_needed, time.perf_counter() - t2)
+
+        t3 = time.perf_counter()
+        final_lufs, final_tp, final_dr, duration = _pass2_stream(
+            pre_lufs_path,
+            output_path,
+            preset,
+            gain_needed=gain_needed,
+            target_tp_db=target_tp_db,
+        )
+        log.info("Pass 2 (gain/limit/out): %.1fs", time.perf_counter() - t3)
+
+        if metadata or artwork_bytes:
+            _embed_riff_metadata_file(output_path, metadata, artwork_bytes)
+
+        total = time.perf_counter() - t0
+        log.info(
+            "TOTAL: %.1fs (rtf=%.1fx) LUFS=%.1f dBTP=%.2f DR=%.1f",
+            total,
+            total / max(input_dur, 0.01),
+            final_lufs,
+            final_tp,
+            final_dr,
+        )
+
+        return {
+            "lufs": round(final_lufs, 1),
+            "dbtp": round(final_tp, 2),
+            "dr": round(final_dr, 1),
+            "duration": round(duration, 2),
+            "genre": genre,
+            "target_lufs": target_lufs,
+            "target_tp_db": target_tp_db,
+        }
+    finally:
+        safe_unlink(pre_lufs_path)
+        gc.collect()
+
 
 def master_audio(
     input_bytes: bytes,
@@ -325,187 +613,47 @@ def master_audio(
     metadata: dict | None = None,
     artwork_bytes: bytes | None = None,
 ) -> tuple[bytes, dict]:
-    """
-    Master an audio file and return 44.1 kHz / 24-bit WAV bytes plus full analysis.
-
-    Parameters
-    ----------
-    input_bytes  : raw audio file bytes (any format soundfile can decode)
-    genre        : genre key string (e.g. "pop", "hiphop", "rnb")
-    target_lufs  : integrated LUFS target (default -14.0)
-    target_tp_db : true-peak ceiling in dBTP (default -1.0)
-    metadata     : dict of text metadata fields (title, artist, etc.)
-    artwork_bytes: raw image bytes (JPEG/PNG) to embed as cover art
-
-    Returns
-    -------
-    tuple[bytes, dict] : (24-bit PCM WAV at 44100 Hz stereo, analysis dict)
-        analysis dict keys:
-        - lufs    : integrated loudness (LUFS)
-        - dbtp    : true-peak level (dBTP)
-        - dr      : dynamic range (dB)
-        - duration: audio duration (seconds)
-        - genre   : genre used for mastering
-        - target_lufs : target LUFS requested
-    """
-    if not PEDALBOARD_AVAILABLE:
-        raise RuntimeError(
-            f"pedalboard is not installed: {_PEDALBOARD_ERROR}. "
-            "Run: pip install pedalboard"
+    """In-memory wrapper: temp files + master_audio_file."""
+    in_path = write_bytes_to_temp(input_bytes, suffix=".audio")
+    out_path = temp_path("_out.wav")
+    try:
+        analysis = master_audio_file(
+            in_path,
+            out_path,
+            genre,
+            target_lufs=target_lufs,
+            target_tp_db=target_tp_db,
+            metadata=metadata,
+            artwork_bytes=artwork_bytes,
         )
-
-    t0 = time.perf_counter()
-
-    preset = get_preset(genre)
-    target_lufs  = preset.get("target_lufs",  target_lufs)
-    target_tp_db = preset.get("target_tp_db", target_tp_db)
-
-    log.info("Mastering — genre=%s target_lufs=%.1f target_tp=%.1f",
-             genre, target_lufs, target_tp_db)
-
-    _check_upload_size(input_bytes)
-    duration_sec, src_sr_probe, channels = _probe_audio(input_bytes)
-    log.info(
-        "Input probe: %.2f s, %d Hz, %d ch, %.1f MB file",
-        duration_sec,
-        src_sr_probe,
-        channels,
-        len(input_bytes) / (1024 * 1024),
-    )
-
-    # ── 1. Load input audio ─────────────────────────────────────────────────
-    with io.BytesIO(input_bytes) as buf:
-        audio_raw, src_sr = sf.read(buf, dtype="float32", always_2d=True)
-
-    audio = _ensure_stereo(audio_raw)
-    del audio_raw
-    input_dur = len(audio) / src_sr
-    log.info("Input: %d samples @ %d Hz, %.2f s", len(audio), src_sr, input_dur)
-
-    # ── 2. Resample to 44 100 Hz if necessary ───────────────────────────────
-    if src_sr != TARGET_SR:
-        # Use pedalboard's built-in resampler (no scipy needed)
-        resample_board = Pedalboard([Resample(target_sample_rate=TARGET_SR)])
-        audio_pb = audio.T
-        audio_pb = resample_board.process(audio_pb, sample_rate=src_sr)
-        audio = audio_pb.T.astype(np.float32)
-        log.info("Resampled %d → %d Hz", src_sr, TARGET_SR)
-    sr = TARGET_SR
-    log.info("Load+resample: %.1fs", time.perf_counter() - t0)
-
-    # ── 3. Build pedalboard EQ + compressor chain ────────────────────────────
-    t1 = time.perf_counter()
-    p = preset
-    comp_cfg = p["comp"]
-
-    board = Pedalboard([
-        HighpassFilter(cutoff_frequency_hz=p["hpf_hz"]),
-        LowShelfFilter(cutoff_frequency_hz=p["low_shelf"]["freq_hz"], gain_db=p["low_shelf"]["gain_db"]),
-        PeakFilter(cutoff_frequency_hz=p["mid_dip"]["freq_hz"], gain_db=p["mid_dip"]["gain_db"], q=p["mid_dip"]["q"]),
-        PeakFilter(cutoff_frequency_hz=p["presence"]["freq_hz"], gain_db=p["presence"]["gain_db"], q=p["presence"]["q"]),
-        HighShelfFilter(cutoff_frequency_hz=p["air_shelf"]["freq_hz"], gain_db=p["air_shelf"]["gain_db"]),
-        Compressor(threshold_db=comp_cfg["threshold_db"], ratio=comp_cfg["ratio"], attack_ms=comp_cfg["attack_ms"], release_ms=comp_cfg["release_ms"]),
-    ])
-
-    audio_pb = audio.T
-    audio_pb = board.process(audio_pb, sample_rate=sr)
-    audio = audio_pb.T
-    del audio_pb
-    audio = audio * _db_to_lin(comp_cfg.get("makeup_db", 0.0))
-    log.info("EQ+Compressor: %.1fs", time.perf_counter() - t1)
-
-    # ── 4. Saturation ────────────────────────────────────────────────────────
-    t2 = time.perf_counter()
-    audio = _soft_clip_saturation(audio, p["saturation_drive"])
-    log.info("Saturation: %.1fs", time.perf_counter() - t2)
-
-    # ── 5. Stereo widener ────────────────────────────────────────────────────
-    t3 = time.perf_counter()
-    audio = _ms_widen(audio, p.get("width", 1.0))
-    log.info("Stereo widen: %.1fs", time.perf_counter() - t3)
-
-    # ── 6. LUFS normalisation ────────────────────────────────────────────────
-    t4 = time.perf_counter()
-    limiter = Pedalboard([
-        Limiter(threshold_db=p["limiter"]["threshold_db"], release_ms=p["limiter"]["release_ms"])
-    ])
-
-    measured_lufs = _lufs(audio, sr)
-    if np.isfinite(measured_lufs) and measured_lufs > -70:
-        gain_needed = float(np.clip(target_lufs - measured_lufs, -MAX_GAIN_DB, MAX_GAIN_DB))
-        log.info("LUFS=%.2f gain=%.2fdB", measured_lufs, gain_needed)
-        audio = audio * _db_to_lin(gain_needed)
-
-    audio_pb = audio.T
-    audio_pb = limiter.process(audio_pb, sample_rate=sr)
-    audio = audio_pb.T
-    log.info("LUFS+limiter: %.1fs", time.perf_counter() - t4)
-
-    # ── 7. Hard ceiling ──────────────────────────────────────────────────────
-    t5 = time.perf_counter()
-    peak = float(np.max(np.abs(audio)))
-    if peak > 1e-6:
-        hard_ceil = _db_to_lin(target_tp_db - 0.05)
-        if peak > hard_ceil:
-            audio = audio * (hard_ceil / peak)
-            log.info("Hard ceiling applied")
-    log.info("Ceiling: %.1fs", time.perf_counter() - t5)
-
-    # ── 8. Final stats ───────────────────────────────────────────────────────
-    t6 = time.perf_counter()
-    final_lufs = _lufs(audio, sr)
-    final_tp = _true_peak_db(audio)
-    final_dr = _dynamic_range(audio)
-    duration = len(audio) / sr
-    log.info("Final stats: LUFS=%.1f dBTP=%.2f DR=%.1f dB duration=%.1fs",
-             final_lufs, final_tp, final_dr, duration)
-    log.info("Final stats: %.1fs", time.perf_counter() - t6)
-
-    # ── 9. Encode WAV ────────────────────────────────────────────────────────
-    t7 = time.perf_counter()
-    out_buf = io.BytesIO()
-    sf.write(out_buf, audio.astype(np.float32), sr, format="WAV", subtype="PCM_24")
-    wav_bytes = out_buf.getvalue()
-    log.info("WAV encode: %.1fs", time.perf_counter() - t7)
-
-    # ── 10. Metadata ─────────────────────────────────────────────────────────
-    wav_bytes = _embed_riff_metadata(wav_bytes, metadata, artwork_bytes)
-
-    del audio
-    gc.collect()
-
-    total = time.perf_counter() - t0
-    log.info("TOTAL: %.1fs (rtf=%.1fx)", total, total / input_dur)
-
-    analysis = {
-        "lufs": round(final_lufs, 1),
-        "dbtp": round(final_tp, 2),
-        "dr": round(final_dr, 1),
-        "duration": round(duration, 2),
-        "genre": genre,
-        "target_lufs": target_lufs,
-        "target_tp_db": target_tp_db,
-    }
-    return wav_bytes, analysis
+        return out_path.read_bytes(), analysis
+    finally:
+        safe_unlink(in_path)
+        safe_unlink(out_path)
 
 
-# ─────────────────────────── quick self-test ────────────────────────────────
 if __name__ == "__main__":
     import sys
-    logging.basicConfig(level=logging.INFO,
-                        format="%(levelname)s %(message)s")
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     if len(sys.argv) < 2:
         print("Usage: python dsp_chain.py <input_audio> [genre] [output.wav]")
         sys.exit(1)
 
-    src  = Path(sys.argv[1])
+    src = Path(sys.argv[1])
     genre = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_GENRE
     dest = Path(sys.argv[3]) if len(sys.argv) > 3 else src.with_stem(src.stem + "_mastered")
 
-    raw = src.read_bytes()
-    out, analysis = master_audio(raw, genre)
-    dest.write_bytes(out)
+    if src.exists() and src.stat().st_size <= MAX_UPLOAD_BYTES:
+        analysis = master_audio_file(src, dest, genre)
+    else:
+        raw = src.read_bytes()
+        out, analysis = master_audio(raw, genre)
+        dest.write_bytes(out)
+
     print(f"✓ Mastered → {dest}")
-    print(f"  LUFS={analysis['lufs']} | dBTP={analysis['dbtp']} | DR={analysis['dr']} dB | {analysis['duration']}s")
-    print(f"  Genre: {analysis['genre']} | Target: {analysis['target_lufs']} LUFS")
+    print(
+        f"  LUFS={analysis['lufs']} | dBTP={analysis['dbtp']} | "
+        f"DR={analysis['dr']} dB | {analysis['duration']}s"
+    )

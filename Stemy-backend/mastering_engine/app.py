@@ -22,7 +22,6 @@ Usage:
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import time
@@ -33,7 +32,8 @@ from flask import Flask, jsonify, request, send_file, abort
 from flask_cors import CORS
 
 from genres import GENRES, DEFAULT_GENRE, get_preset
-from dsp_chain import master_audio, TARGET_LUFS, TARGET_TP_DB
+from dsp_chain import master_audio_file, TARGET_LUFS, TARGET_TP_DB
+from io_stream import safe_unlink, temp_path
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -189,32 +189,44 @@ def master():
         t_tp,
     )
 
-    # ── Read raw bytes ────────────────────────────────────────────────────────
+    suffix = Path(f.filename).suffix.lower() or ".audio"
+    in_path = temp_path(f"_in{suffix}")
+    out_path = temp_path("_out.wav")
+
     try:
-        log.info("[QUICK MASTER] Reading file bytes...")
-        raw = f.read()
-        log.info("[QUICK MASTER] Successfully read %d bytes", len(raw))
+        log.info("[QUICK MASTER] Saving upload to temp file...")
+        f.save(str(in_path))
+        log.info("[QUICK MASTER] Saved %d bytes to %s", in_path.stat().st_size, in_path)
     except Exception as exc:
-        log.error("[QUICK MASTER] Failed to read upload: %s", exc)
+        safe_unlink(in_path)
+        safe_unlink(out_path)
+        log.error("[QUICK MASTER] Failed to save upload: %s", exc)
         abort(500, description="Could not read uploaded file.")
 
-    # ── Run mastering chain ───────────────────────────────────────────────────
     t_start = time.perf_counter()
     try:
-        log.info("[QUICK MASTER] Starting audio processing...")
-        wav_bytes, analysis = master_audio(
-            raw,
+        log.info("[QUICK MASTER] Starting audio processing (streaming)...")
+        analysis = master_audio_file(
+            in_path,
+            out_path,
             genre=genre,
             target_lufs=t_lufs,
             target_tp_db=t_tp,
             metadata=metadata,
             artwork_bytes=art_bytes,
         )
-        log.info("[QUICK MASTER] Audio processing completed. Output size: %d bytes", len(wav_bytes))
+        log.info(
+            "[QUICK MASTER] Audio processing completed. Output size: %d bytes",
+            out_path.stat().st_size,
+        )
     except ValueError as exc:
+        safe_unlink(in_path)
+        safe_unlink(out_path)
         log.warning("[QUICK MASTER] Rejected %s: %s", f.filename, exc)
         abort(413, description=str(exc))
     except Exception as exc:
+        safe_unlink(in_path)
+        safe_unlink(out_path)
         log.exception("[QUICK MASTER] Mastering failed for %s: %s", f.filename, exc)
         abort(
             500,
@@ -223,7 +235,11 @@ def master():
                 "Ensure the file is a valid audio file and try again."
             ),
         )
+    finally:
+        safe_unlink(in_path)
+
     elapsed_ms = int((time.perf_counter() - t_start) * 1000)
+    out_size = out_path.stat().st_size
 
     log.info(
         "Done — genre=%s lufs=%.1f dbtp=%.2f dr=%.1f elapsed=%d ms output=%d KB",
@@ -232,16 +248,19 @@ def master():
         analysis["dbtp"],
         analysis["dr"],
         elapsed_ms,
-        len(wav_bytes) // 1024,
+        out_size // 1024,
     )
 
-    # ── Build download filename ───────────────────────────────────────────────
     stem = Path(f.filename).stem
     download_name = f"{stem}_mastered_{genre}.wav"
 
-    # ── Return WAV ────────────────────────────────────────────────────────────
+    @request.after_this_request
+    def _cleanup(response):
+        safe_unlink(out_path)
+        return response
+
     response = send_file(
-        io.BytesIO(wav_bytes),
+        out_path,
         mimetype="audio/wav",
         as_attachment=True,
         download_name=download_name,

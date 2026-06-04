@@ -1,9 +1,10 @@
 import { prisma } from "../lib/prisma.js";
-import { uploadBuffer, getDownloadUrl } from "../services/storage.service.js";
+import { uploadBuffer, uploadStream, getDownloadUrl } from "../services/storage.service.js";
 import { enqueueMasteringJob, getLocalDownloadPath } from "../services/queue.service.js";
 import https from "https";
 import http from "http";
 import fs from "fs";
+import fsp from "fs/promises";
 
 const ALLOWED_PLANS = ["BASIC", "PRO"];
 
@@ -79,22 +80,47 @@ export const createQuickMaster = async (req, res) => {
     // Upload artwork if provided
     if (artwork) {
       const artKey = `artwork/${req.userId}/${Date.now()}-${artwork.originalname}`;
-      const artUrl = await uploadBuffer({
-        key: artKey,
-        body: artwork.buffer,
-        contentType: artwork.mimetype,
-      });
+      const artType = artwork.mimetype || "image/jpeg";
+      let artUrl;
+      if (artwork.path) {
+        const artStat = await fsp.stat(artwork.path);
+        artUrl = await uploadStream({
+          key: artKey,
+          stream: fs.createReadStream(artwork.path),
+          contentType: artType,
+          contentLength: artStat.size,
+        });
+        await fsp.unlink(artwork.path).catch(() => {});
+      } else {
+        artUrl = await uploadBuffer({
+          key: artKey,
+          body: artwork.buffer,
+          contentType: artType,
+        });
+      }
       parsedMetadata = { ...parsedMetadata, artworkUrl: artUrl };
       console.log("[QUICK MASTER] Artwork uploaded to:", artUrl);
     }
 
     console.log("[QUICK MASTER] Uploading source to storage...");
     const sourceKey = `masters/${req.userId}/${Date.now()}-${file.originalname}`;
-    const sourceUrl = await uploadBuffer({
-      key: sourceKey,
-      body: file.buffer,
-      contentType: file.mimetype || "application/octet-stream",
-    });
+    const contentType = file.mimetype || "application/octet-stream";
+    let sourceUrl;
+    if (file.path) {
+      const stat = await fsp.stat(file.path);
+      sourceUrl = await uploadStream({
+        key: sourceKey,
+        stream: fs.createReadStream(file.path),
+        contentType,
+        contentLength: stat.size,
+      });
+    } else {
+      sourceUrl = await uploadBuffer({
+        key: sourceKey,
+        body: file.buffer,
+        contentType,
+      });
+    }
     console.log("[QUICK MASTER] Source uploaded to:", sourceUrl);
 
     console.log("[QUICK MASTER] Creating database record...");
@@ -113,8 +139,14 @@ export const createQuickMaster = async (req, res) => {
     console.log("[QUICK MASTER] Database record created with ID:", master.id);
 
     console.log("[QUICK MASTER] Enqueuing mastering job...");
-    await enqueueMasteringJob(master.id, file.buffer);
+    await enqueueMasteringJob(master.id, file.path || null);
     console.log("[QUICK MASTER] Mastering job enqueued successfully");
+
+    if (file.path) {
+      await fsp.unlink(file.path).catch((err) => {
+        console.warn("[QUICK MASTER] Failed to remove multer temp:", err.message);
+      });
+    }
 
     return res.status(201).json({ master });
   } catch (error) {
