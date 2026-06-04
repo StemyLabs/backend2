@@ -192,7 +192,10 @@ def _process_segment(job: _SegJob) -> str:
         channels_first_to_samples,
         open_pedalboard_input,
     )
-    from io_stream import normalize_to_stereo_channels_first
+    from io_stream import (
+        normalize_to_stereo_channels_first,
+        samples_to_channels_first,
+    )
 
     preset = get_preset(job.genre)
     board, comp_cfg = _build_eq_board(preset)
@@ -391,10 +394,15 @@ def master_turbo(
     output_path = Path(output_path)
     preset = get_preset(genre)
 
-    if _ffmpeg_bin():
+    ffmpeg = _ffmpeg_bin()
+    if ffmpeg:
         try:
             return _master_ffmpeg(input_path, output_path, preset)
         except Exception as exc:
             log.warning("ffmpeg turbo failed (%s), trying parallel fallback", exc)
+    else:
+        log.warning(
+            "ffmpeg not found on PATH — install ffmpeg for fast turbo (apt install ffmpeg)",
+        )
 
     return _master_parallel(input_path, output_path, genre, preset)
