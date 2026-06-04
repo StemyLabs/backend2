@@ -1,6 +1,6 @@
 import { Queue, Worker } from "bullmq";
 import Redis from "ioredis";
-import FormData from "form-data";
+import { openAsBlob } from "node:fs";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { sendEmail } from "../utils/email.js";
@@ -30,6 +30,49 @@ const downloadCache = new Map();
 const safeUnlink = (filePath) => {
   if (!filePath) return;
   fsp.unlink(filePath).catch(() => {});
+};
+
+/** Build multipart body for Python /master (native FormData — node-fetch + form-data streams are empty). */
+const buildMasterFormData = async ({
+  srcPath,
+  sourceName,
+  sourceMime,
+  genre,
+  metadata,
+  artBuf,
+  artworkUrl,
+}) => {
+  const formData = new FormData();
+  const mime = sourceMime || "application/octet-stream";
+
+  let fileBlob;
+  try {
+    fileBlob = await openAsBlob(srcPath, { type: mime });
+  } catch {
+    const buf = await fsp.readFile(srcPath);
+    fileBlob = new Blob([buf], { type: mime });
+  }
+  formData.append("file", fileBlob, sourceName);
+  formData.append("genre", genre);
+
+  if (metadata) {
+    const metaStr =
+      typeof metadata === "string" ? metadata : JSON.stringify(metadata);
+    formData.append("metadata", metaStr);
+  }
+
+  if (artBuf) {
+    const artUrl = artworkUrl || "";
+    const artMime = artUrl.endsWith(".png") ? "image/png" : "image/jpeg";
+    const ext = artMime === "image/png" ? "png" : "jpg";
+    formData.append(
+      "artwork",
+      new Blob([artBuf], { type: artMime }),
+      `cover.${ext}`,
+    );
+  }
+
+  return formData;
 };
 
 if (redisConnection) {
@@ -95,26 +138,21 @@ if (redisConnection) {
           }
         }
 
-        const formData = new FormData();
-        formData.append("file", fs.createReadStream(srcPath), {
-          filename: master.sourceName,
-          contentType: master.sourceMime || "application/octet-stream",
-          knownLength: srcStat.size,
+        const formData = await buildMasterFormData({
+          srcPath,
+          sourceName: master.sourceName,
+          sourceMime: master.sourceMime,
+          genre: master.genre,
+          metadata: master.metadata,
+          artBuf,
+          artworkUrl: master.metadata?.artworkUrl,
         });
-        formData.append("genre", master.genre);
-        const meta = master.metadata;
-        if (meta) {
-          const metaStr = typeof meta === "string" ? meta : JSON.stringify(meta);
-          formData.append("metadata", metaStr);
-        }
-        if (artBuf) {
-          const artUrl = master.metadata?.artworkUrl || "";
-          const artMime = artUrl.endsWith(".png") ? "image/png" : "image/jpeg";
-          formData.append("artwork", Buffer.from(artBuf), {
-            filename: "cover." + (artMime === "image/png" ? "png" : "jpg"),
-            contentType: artMime,
-          });
-        }
+
+        console.log(
+          "[QUICK MASTER] POST /master — file=%s size=%d bytes",
+          master.sourceName,
+          srcStat.size,
+        );
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 600000);
@@ -123,9 +161,7 @@ if (redisConnection) {
           pythonResponse = await fetch(`${env.PYTHON_ENGINE_URL}/master`, {
             method: "POST",
             body: formData,
-            headers: formData.getHeaders(),
             signal: controller.signal,
-            duplex: "half",
           });
         } catch (fetchError) {
           clearTimeout(timeoutId);
