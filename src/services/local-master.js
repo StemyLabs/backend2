@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { env } from "../config/env.js";
-import { MASTER_TMP_DIR } from "../utils/master-temp.js";
+import { getMasterTmpDir } from "../utils/master-temp.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultCli = path.resolve(__dirname, "../../mastering_engine/cli_master.py");
@@ -72,7 +72,7 @@ export const runLocalMasterCli = ({ inputPath, outputPath, genre }) =>
       {
         env: {
           ...process.env,
-          STEMY_TEMP_DIR: MASTER_TMP_DIR,
+          STEMY_TEMP_DIR: getMasterTmpDir(),
           STEMY_TURBO: process.env.STEMY_TURBO || "1",
         },
         stdio: ["ignore", "pipe", "pipe"],

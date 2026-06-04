@@ -7,8 +7,8 @@ import { runLocalMaster } from "./local-master.js";
 import { prisma } from "../lib/prisma.js";
 import { sendEmail } from "../utils/email.js";
 import {
-  MASTER_TMP_DIR,
   findStagedMasterSource,
+  getMasterTmpDir,
   masterSourcePath,
   stageMasterSource,
 } from "../utils/master-temp.js";
@@ -26,6 +26,9 @@ export const masteringQueue = redisConnection
   : null;
 
 const downloadCache = new Map();
+/** Serialize inline masters (one at a time on this Node process). */
+let inlineMasterChain = Promise.resolve();
+const useBullMaster = process.env.STEMY_USE_BULL_MASTER === "1";
 
 const safeUnlink = (filePath) => {
   if (!filePath) return;
@@ -71,98 +74,120 @@ const buildMasterFormData = async ({
   return formData;
 };
 
-if (redisConnection) {
-  const worker = new Worker(
-    "mastering",
-    async (job) => {
-      const { masterId } = job.data;
-      console.log("[QUICK MASTER] Processing mastering job for master ID:", masterId);
+const failMaster = async (masterId, message) => {
+  await prisma.master.update({
+    where: { id: masterId },
+    data: { status: "FAILED", error: message },
+  });
+};
 
-      const master = await prisma.master.findUnique({
-        where: { id: masterId },
-        include: { user: true },
-      });
-      if (!master) {
-        console.error("[QUICK MASTER] Master not found:", masterId);
-        return;
+const resolveSourcePath = async (masterId, master) => {
+  const tmpDir = getMasterTmpDir();
+  const expectedSource = masterSourcePath(masterId, master.sourceName);
+  if (fs.existsSync(expectedSource)) {
+    return expectedSource;
+  }
+  const staged = await findStagedMasterSource(masterId);
+  if (staged) {
+    return staged;
+  }
+  const listing = await fsp.readdir(tmpDir).catch(() => []);
+  console.error(
+    "[QUICK MASTER] Source missing for %s — expected %s — dir %s has: %s",
+    masterId,
+    expectedSource,
+    tmpDir,
+    listing.filter((n) => n.includes(masterId.slice(0, 8))).join(", ") || "(none)",
+  );
+  return null;
+};
+
+export const processMasteringJob = async (masterId) => {
+  console.log("[QUICK MASTER] Processing mastering job for master ID:", masterId);
+  console.log("[QUICK MASTER] Temp dir:", getMasterTmpDir());
+
+  const master = await prisma.master.findUnique({
+    where: { id: masterId },
+    include: { user: true },
+  });
+  if (!master) {
+    console.error("[QUICK MASTER] Master not found:", masterId);
+    return;
+  }
+
+  let srcPath = null;
+
+  try {
+    const T = (label) => {
+      const t = Date.now();
+      return [t, label];
+    };
+    let marks = [];
+    marks.push(T("start"));
+    await prisma.master.update({
+      where: { id: masterId },
+      data: { status: "PROCESSING" },
+    });
+
+    srcPath = await resolveSourcePath(masterId, master);
+
+    if (!srcPath) {
+      if (master.sourceUrl?.startsWith("local://pending")) {
+        throw new Error(
+          "Source file was not found on the server. Re-upload the track and try again.",
+        );
       }
+      const sourceDownloadUrl = await getDownloadUrl(master.sourceUrl);
+      if (sourceDownloadUrl.startsWith("local://")) {
+        throw new Error(
+          "Invalid local source URL; re-upload the track and try again.",
+        );
+      }
+      marks.push(T("signed_url"));
+      srcPath = masterSourcePath(masterId, master.sourceName);
+      const sourceResponse = await fetch(sourceDownloadUrl);
+      if (!sourceResponse.ok) {
+        throw new Error("Failed to download source audio");
+      }
+      const buf = Buffer.from(await sourceResponse.arrayBuffer());
+      await fsp.writeFile(srcPath, buf);
+    }
 
-      let srcPath = null;
+    console.log("[QUICK MASTER] Using source file: %s", srcPath);
+    marks.push(T("get_src"));
 
+    const srcStat = await fsp.stat(srcPath);
+    if (srcStat.size > 100 * 1024 * 1024) {
+      throw new Error("File too large. Maximum size is 100MB");
+    }
+
+    let artBuf = null;
+    if (master.metadata?.artworkUrl) {
       try {
-        const T = (label) => {
-          const t = Date.now();
-          return [t, label];
-        };
-        let marks = [];
-        marks.push(T("start"));
-        await prisma.master.update({
-          where: { id: masterId },
-          data: { status: "PROCESSING" },
-        });
-
-        const expectedSource = masterSourcePath(masterId, master.sourceName);
-        srcPath = fs.existsSync(expectedSource)
-          ? expectedSource
-          : await findStagedMasterSource(masterId);
-
-        if (!srcPath) {
-          if (master.sourceUrl?.startsWith("local://pending")) {
-            throw new Error(
-              "Source file was not found on the server. Re-upload the track and try again.",
-            );
-          }
-          const sourceDownloadUrl = await getDownloadUrl(master.sourceUrl);
-          if (sourceDownloadUrl.startsWith("local://")) {
-            throw new Error(
-              "Invalid local source URL; re-upload the track and try again.",
-            );
-          }
-          marks.push(T("signed_url"));
-          srcPath = expectedSource;
-          const sourceResponse = await fetch(sourceDownloadUrl);
-          if (!sourceResponse.ok) {
-            throw new Error("Failed to download source audio");
-          }
-          const buf = Buffer.from(await sourceResponse.arrayBuffer());
-          await fsp.writeFile(srcPath, buf);
+        const artSignedUrl = await getDownloadUrl(master.metadata.artworkUrl);
+        const artResp = await fetch(artSignedUrl);
+        if (artResp.ok) {
+          artBuf = await artResp.arrayBuffer();
+          console.log("[QUICK MASTER] Artwork downloaded:", artBuf.byteLength, "bytes");
         }
+      } catch (artErr) {
+        console.warn("[QUICK MASTER] Failed to download artwork:", artErr.message);
+      }
+    }
 
-        console.log("[QUICK MASTER] Using source file: %s", srcPath);
-        marks.push(T("get_src"));
+    const outExt = (process.env.STEMY_OUTPUT_EXT || ".flac").toLowerCase();
+    const tmpPath = path.join(getMasterTmpDir(), `${masterId}${outExt}`);
 
-        const srcStat = await fsp.stat(srcPath);
-        if (srcStat.size > 100 * 1024 * 1024) {
-          throw new Error("File too large. Maximum size is 100MB");
-        }
+    let lufs = -14;
+    let dbtp = -1;
+    let dr = 6;
+    let duration = 0;
+    let pyTime = null;
+    let outputLength;
 
-        let artBuf = null;
-        if (master.metadata?.artworkUrl) {
-          try {
-            const artSignedUrl = await getDownloadUrl(master.metadata.artworkUrl);
-            const artResp = await fetch(artSignedUrl);
-            if (artResp.ok) {
-              artBuf = await artResp.arrayBuffer();
-              console.log("[QUICK MASTER] Artwork downloaded:", artBuf.byteLength, "bytes");
-            }
-          } catch (artErr) {
-            console.warn("[QUICK MASTER] Failed to download artwork:", artErr.message);
-          }
-        }
+    const useLocalCli = env.PYTHON_USE_LOCAL_CLI === true;
 
-        const outExt = (process.env.STEMY_OUTPUT_EXT || ".flac").toLowerCase();
-        const tmpPath = path.join(MASTER_TMP_DIR, `${masterId}${outExt}`);
-
-        let lufs = -14;
-        let dbtp = -1;
-        let dr = 6;
-        let duration = 0;
-        let pyTime = null;
-        let outputLength;
-
-        const useLocalCli = env.PYTHON_USE_LOCAL_CLI === true;
-
-        if (useLocalCli) {
+    if (useLocalCli) {
           const localMode = (process.env.PYTHON_LOCAL_MODE || "http").toLowerCase();
           console.log(
             "[QUICK MASTER] Local %s — file=%s size=%d bytes",
@@ -237,7 +262,7 @@ if (redisConnection) {
           pyTime = pythonResponse.headers.get("X-Processing-Time-Ms");
           const outFmt = pythonResponse.headers.get("X-Output-Format") || "wav";
           const httpExt = outFmt === "flac" ? ".flac" : ".wav";
-          const httpTmp = path.join(MASTER_TMP_DIR, `${masterId}${httpExt}`);
+          const httpTmp = path.join(getMasterTmpDir(), `${masterId}${httpExt}`);
           outputLength = parseInt(pythonResponse.headers.get("content-length"), 10) || undefined;
 
           const nodeStream = Readable.fromWeb(pythonResponse.body);
@@ -334,17 +359,22 @@ if (redisConnection) {
         console.log(`  DB update      ${fmt(marks[3], marks[4])}`);
         console.log(`  USER READY     ${fmt(marks[0], marks[4])}`);
         console.log(`  (source + output R2 upload in parallel / background)`);
-        console.log(`═══════════════════════════════\n`);
-      } catch (error) {
-        console.error(`Mastering Job Failed for ${masterId}:`, error);
-        throw error;
-      } finally {
-        // Keep source until background R2 archive finishes (~seconds after COMPLETE)
-        if (srcPath && srcPath.includes(`${masterId}-source`)) {
-          setTimeout(() => safeUnlink(srcPath), 120_000);
-        }
-      }
-    },
+    console.log(`═══════════════════════════════\n`);
+  } catch (error) {
+    console.error(`Mastering Job Failed for ${masterId}:`, error);
+    await failMaster(masterId, error.message);
+    throw error;
+  } finally {
+    if (srcPath && srcPath.includes(`${masterId}-source`)) {
+      setTimeout(() => safeUnlink(srcPath), 120_000);
+    }
+  }
+};
+
+if (redisConnection && useBullMaster) {
+  const worker = new Worker(
+    "mastering",
+    async (job) => processMasteringJob(job.data.masterId),
     {
       connection: redisConnection,
       drainDelay: 200,
@@ -353,35 +383,19 @@ if (redisConnection) {
     },
   );
 
-  worker.on("active", (job) => {
-    console.log(
-      "[QUICK MASTER] Worker started job %s master=%s",
-      job.id,
-      job.data.masterId,
-    );
-  });
-
-  worker.on("completed", (job) => {
-    console.log(
-      "[QUICK MASTER] Worker completed job %s master=%s",
-      job.id,
-      job.data.masterId,
-    );
-  });
-
   worker.on("failed", async (job, error) => {
     if (!job) return;
     console.error(
-      "[QUICK MASTER] Worker failed job %s master=%s: %s",
-      job.id,
+      "[QUICK MASTER] Bull worker failed job %s: %s",
       job.data.masterId,
       error?.message,
     );
-    await prisma.master.update({
-      where: { id: job.data.masterId },
-      data: { status: "FAILED", error: error.message },
-    });
   });
+  console.log("[QUICK MASTER] BullMQ mastering worker enabled (STEMY_USE_BULL_MASTER=1)");
+} else {
+  console.log(
+    "[QUICK MASTER] Inline mastering enabled (default on VPS — no Bull queue delay)",
+  );
 }
 
 export const enqueueMasteringJob = async (
@@ -402,24 +416,26 @@ export const enqueueMasteringJob = async (
   console.log("[QUICK MASTER] Source staged for %s → %s", masterId, staged);
 
   if (!masteringQueue) {
-    await prisma.master.update({
-      where: { id: masterId },
-      data: {
-        status: "COMPLETE",
-        outputUrl: (await prisma.master.findUnique({ where: { id: masterId } }))
-          ?.sourceUrl,
-        completedAt: new Date(),
-      },
-    });
+    await processMasteringJob(masterId);
     return;
   }
 
-  const job = await masteringQueue.add(
-    "process",
-    { masterId },
-    { removeOnComplete: 200, removeOnFail: 100 },
-  );
-  console.log("[QUICK MASTER] Bull job %s queued for master %s", job.id, masterId);
+  if (useBullMaster && masteringQueue) {
+    const job = await masteringQueue.add(
+      "process",
+      { masterId },
+      { removeOnComplete: 200, removeOnFail: 100 },
+    );
+    console.log("[QUICK MASTER] Bull job %s queued for master %s", job.id, masterId);
+    return;
+  }
+
+  inlineMasterChain = inlineMasterChain
+    .then(() => processMasteringJob(masterId))
+    .catch((err) => {
+      console.error("[QUICK MASTER] Inline mastering error:", err.message);
+    });
+  console.log("[QUICK MASTER] Inline mastering queued for %s", masterId);
 };
 
 export const getLocalDownloadPath = (masterId) => downloadCache.get(masterId);

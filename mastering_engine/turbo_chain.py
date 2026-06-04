@@ -40,8 +40,17 @@ FFMPEG_TIMEOUT = int(os.environ.get("STEMY_FFMPEG_TIMEOUT_SEC", "85"))
 
 
 def _ffmpeg_bin() -> str | None:
-    path = os.environ.get("FFMPEG_PATH", "ffmpeg")
-    return path if shutil.which(path) else None
+    """Resolve ffmpeg binary (gunicorn often has a minimal PATH without /usr/bin)."""
+    explicit = os.environ.get("FFMPEG_PATH", "").strip()
+    if explicit and Path(explicit).is_file():
+        return explicit
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    for candidate in ("/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
+        if Path(candidate).is_file():
+            return candidate
+    return None
 
 
 def _preset_to_ffmpeg_af(preset: dict) -> str:

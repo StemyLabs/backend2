@@ -130,8 +130,9 @@ After=network.target
 [Service]
 User=root
 WorkingDirectory=/var/www/python-backend/mastering_engine
-Environment="PATH=/var/www/python-backend/mastering_engine/venv/bin"
-ExecStart=/var/www/python-backend/mastering_engine/venv/bin/gunicorn app:app --bind 127.0.0.1:8000 --timeout 1200 --workers 2
+Environment="PATH=/var/www/python-backend/mastering_engine/venv/bin:/usr/bin:/bin"
+Environment="FFMPEG_PATH=/usr/bin/ffmpeg"
+ExecStart=/var/www/python-backend/mastering_engine/venv/bin/gunicorn app:app --bind 127.0.0.1:8000 --timeout 1200 --workers 1
 Restart=always
 
 [Install]

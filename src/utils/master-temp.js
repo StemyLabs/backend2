@@ -3,32 +3,31 @@ import fsp from "fs/promises";
 import os from "os";
 import path from "path";
 
-/** Shared temp dir for multer uploads, BullMQ jobs, and Python STEMY_TEMP_DIR on VPS. */
-export const MASTER_TMP_DIR =
-  process.env.STEMY_TEMP_DIR || path.join(os.tmpdir(), "stemy-masters");
-
-export const ensureMasterTmpDir = () => {
-  if (!fs.existsSync(MASTER_TMP_DIR)) {
-    fs.mkdirSync(MASTER_TMP_DIR, { recursive: true });
+/** Read at call time so dotenv / systemd env is applied before first use. */
+export const getMasterTmpDir = () => {
+  const dir =
+    process.env.STEMY_TEMP_DIR || path.join(os.tmpdir(), "stemy-masters");
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
-  return MASTER_TMP_DIR;
+  return dir;
 };
 
-ensureMasterTmpDir();
+/** @deprecated use getMasterTmpDir() — kept for imports that expect a string */
+export const MASTER_TMP_DIR = getMasterTmpDir();
 
-/** Canonical on-disk source path for a mastering job (do not rely on in-memory maps). */
+/** Canonical on-disk source path for a mastering job. */
 export const masterSourcePath = (masterId, sourceNameOrExt) => {
   const ext = sourceNameOrExt?.startsWith(".")
     ? sourceNameOrExt
     : path.extname(sourceNameOrExt || "") || ".audio";
-  return path.join(MASTER_TMP_DIR, `${masterId}-source${ext}`);
+  return path.join(getMasterTmpDir(), `${masterId}-source${ext}`);
 };
 
 /**
  * Move/copy multer upload to {masterId}-source{ext}. Returns dest path or null.
  */
 export const stageMasterSource = async (masterId, uploadPath, sourceName) => {
-  ensureMasterTmpDir();
   if (!uploadPath || !fs.existsSync(uploadPath)) {
     return null;
   }
@@ -52,13 +51,13 @@ export const stageMasterSource = async (masterId, uploadPath, sourceName) => {
   return dest;
 };
 
-/** Find staged source when extension in DB does not match disk (e.g. .mp3 vs .wav). */
+/** Find staged source when extension in DB does not match disk. */
 export const findStagedMasterSource = async (masterId) => {
-  ensureMasterTmpDir();
+  const dir = getMasterTmpDir();
   const prefix = `${masterId}-source`;
-  const entries = await fsp.readdir(MASTER_TMP_DIR);
+  const entries = await fsp.readdir(dir);
   const match = entries.find((name) => name.startsWith(prefix));
   if (!match) return null;
-  const full = path.join(MASTER_TMP_DIR, match);
+  const full = path.join(dir, match);
   return fs.existsSync(full) ? full : null;
 };
