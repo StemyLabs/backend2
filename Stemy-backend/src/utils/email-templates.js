@@ -214,5 +214,5 @@ export const trialEndingEmail = (firstName, trialEndsAt, frontendUrl) => LAYOUT(
       </td>
     </tr>
   </table>
-  <p style="margin:24px 0 0 0;font-size:13px;color:#6b7280;">&mdash; Team Stemy</p>
+  <p style="margin:24px 0 0 0;font-size:13px;color:#6b7280;">&mdash; Team, Stemy</p>
 `);
