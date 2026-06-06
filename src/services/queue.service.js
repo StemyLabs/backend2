@@ -6,6 +6,8 @@ import { env } from "../config/env.js";
 import { pythonHttpTimeoutMs, runLocalMaster } from "./local-master.js";
 import { prisma } from "../lib/prisma.js";
 import { sendEmail } from "../utils/email.js";
+import { masterReadyEmail } from "../utils/email-templates.js";
+import { createAccessToken } from "../utils/tokens.js";
 import {
   findStagedMasterSource,
   getMasterTmpDir,
@@ -348,10 +350,15 @@ export const processMasteringJob = async (masterId) => {
         })();
 
         if (master.user?.email) {
+          const downloadToken = createAccessToken(master.userId);
+          const apiBaseUrl = env.APP_BASE_URL.replace(/\/+$/, "");
+          const frontendUrl = env.FRONTEND_URL.replace(/\/+$/, "");
+          const downloadUrl = `${apiBaseUrl}/api/masters/${masterId}/download?token=${encodeURIComponent(downloadToken)}`;
+          const dashboardUrl = `${frontendUrl}/pages/profile.html`;
           await sendEmail({
             to: master.user.email,
-            subject: "Your Stemy master is ready",
-            html: `<p>Your mastered track <strong>${master.sourceName}</strong> is ready to download from your dashboard.</p>`,
+            subject: "Your Stemy master is ready — Download Now",
+            html: masterReadyEmail(master.sourceName, downloadUrl, dashboardUrl),
           });
         }
 

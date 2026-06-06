@@ -279,8 +279,9 @@ if (redisConnection) {
 
         if (master.user?.email) {
           const downloadToken = createAccessToken(master.userId);
+          const apiBaseUrl = env.APP_BASE_URL.replace(/\/+$/, "");
           const frontendUrl = env.FRONTEND_URL.replace(/\/+$/, "");
-          const downloadUrl = `${frontendUrl}/api/masters/${masterId}/download?token=${encodeURIComponent(downloadToken)}`;
+          const downloadUrl = `${apiBaseUrl}/api/masters/${masterId}/download?token=${encodeURIComponent(downloadToken)}`;
           const dashboardUrl = `${frontendUrl}/pages/profile.html`;
           await sendEmail({
             to: master.user.email,

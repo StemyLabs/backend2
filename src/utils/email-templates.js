@@ -175,6 +175,27 @@ export const subscriptionWelcomeEmail = (firstName, plan, trialEndsAt, url) => {
 `);
 };
 
+export const masterReadyEmail = (sourceName, downloadUrl, dashboardUrl) => LAYOUT(`
+  <h1 style="font-family:'Syne','Unbounded',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:22px;font-weight:700;line-height:1.2;color:#f0f2f7;margin:0 0 16px 0;">Your master is ready! 🎧</h1>
+  <p style="margin:0 0 16px 0;color:#9ca3af;">Your mastered track <strong style="color:#f0f2f7;">${sourceName}</strong> has been processed and is ready to download.</p>
+  <table role="presentation" border="0" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="border-radius:10px;background:linear-gradient(135deg,#1CE783,#4FE9A1);">
+        <a href="${downloadUrl}" target="_blank" style="display:inline-block;padding:14px 28px;font-family:'DM Sans','Inter Tight',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;font-weight:700;color:#052916;text-decoration:none;border-radius:10px;letter-spacing:0.02em;">Download Master</a>
+      </td>
+    </tr>
+  </table>
+  <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:20px 0 0 0;">
+    <tr>
+      <td style="padding:12px 16px;background:rgba(123,97,255,0.08);border-radius:8px;border-left:3px solid #7b61ff;">
+        <p style="margin:0 0 8px 0;color:#c4b8ff;font-size:13px;">This download link is private and expires in 7 days.</p>
+        <p style="margin:0;color:#c4b8ff;font-size:13px;">You can also access all your masters from your <a href="${dashboardUrl}" style="color:#00e5a0;text-decoration:underline;">Stemy dashboard</a>.</p>
+      </td>
+    </tr>
+  </table>
+  <p style="margin:24px 0 0 0;font-size:13px;color:#6b7280;">&mdash; Team Stemy</p>
+`);
+
 export const trialEndingEmail = (firstName, trialEndsAt, frontendUrl) => LAYOUT(`
   <h1 style="font-family:'Syne','Unbounded',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:22px;font-weight:700;line-height:1.2;color:#ff8c42;margin:0 0 16px 0;">Your trial is ending soon</h1>
   <p style="margin:0 0 12px 0;color:#9ca3af;">Hey ${firstName || 'artist'},</p>

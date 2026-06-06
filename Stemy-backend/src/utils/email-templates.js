@@ -188,7 +188,7 @@ export const masterReadyEmail = (sourceName, downloadUrl, dashboardUrl) => LAYOU
   <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:20px 0 0 0;">
     <tr>
       <td style="padding:12px 16px;background:rgba(123,97,255,0.08);border-radius:8px;border-left:3px solid #7b61ff;">
-        <p style="margin:0 0 8px 0;color:#c4b8ff;font-size:13px;">This download link is private and expires in 24 hours.</p>
+        <p style="margin:0 0 8px 0;color:#c4b8ff;font-size:13px;">This download link is private and expires in 7 days.</p>
         <p style="margin:0;color:#c4b8ff;font-size:13px;">You can also access all your masters from your <a href="${dashboardUrl}" style="color:#00e5a0;text-decoration:underline;">Stemy dashboard</a>.</p>
       </td>
     </tr>
