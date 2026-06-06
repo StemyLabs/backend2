@@ -310,7 +310,7 @@ if (redisConnection) {
         }
       }
     },
-    { connection: redisConnection, drainDelay: 200 },
+    { connection: redisConnection, concurrency: env.WORKER_CONCURRENCY, drainDelay: 200 },
   );
 
   worker.on("failed", async (job, error) => {

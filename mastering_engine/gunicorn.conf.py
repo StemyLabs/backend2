@@ -11,8 +11,8 @@ if _engine_dir not in sys.path:
 port = os.environ.get("PORT")
 bind = f"0.0.0.0:{port}" if port else "0.0.0.0:10000"
 
-# One worker — Render Standard (2 GB): avoids two concurrent masters OOMing RAM
-workers = int(os.environ.get("WEB_CONCURRENCY", "1"))
+# Two workers — Render Standard (2 GB) handles 2 concurrent masters at ~1 GB peak
+workers = int(os.environ.get("WEB_CONCURRENCY", "2"))
 
 # Worker class
 worker_class = "sync"

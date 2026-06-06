@@ -27,6 +27,7 @@ const envSchema = z.object({
   R2_SECRET_ACCESS_KEY: z.string().optional(),
   R2_BUCKET: z.string().optional(),
   R2_PUBLIC_BASE_URL: z.string().url().optional(),
+  WORKER_CONCURRENCY: z.coerce.number().min(1).default(2),
   APP_BASE_URL: z.string().url().default("http://localhost:3000"),
 });
 
