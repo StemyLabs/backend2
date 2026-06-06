@@ -5,6 +5,8 @@ import { Readable } from "stream";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { sendEmail } from "../utils/email.js";
+import { masterReadyEmail } from "../utils/email-templates.js";
+import { createAccessToken } from "../utils/tokens.js";
 import { MASTER_TMP_DIR } from "../utils/master-temp.js";
 import { getDownloadUrl, uploadStream } from "./storage.service.js";
 import fs from "fs";
@@ -25,6 +27,19 @@ const downloadCache = new Map();
 const safeUnlink = (filePath) => {
   if (!filePath) return;
   fsp.unlink(filePath).catch(() => {});
+};
+
+const updateProgress = async (masterId, progress, label) => {
+  try {
+    const master = await prisma.master.findUnique({ where: { id: masterId }, select: { metadata: true } });
+    const meta = master?.metadata || {};
+    await prisma.master.update({
+      where: { id: masterId },
+      data: { metadata: { ...meta, progress, progressLabel: label } },
+    });
+  } catch (err) {
+    console.warn("[PROGRESS] Failed to update progress for", masterId, err.message);
+  }
 };
 
 /** Native FormData + file Blob (undici fetch; npm form-data streams break Readable.toWeb). */
@@ -91,10 +106,13 @@ if (redisConnection) {
         };
         let marks = [];
         marks.push(T("start"));
+
+        await updateProgress(masterId, 45, "Reading source file...");
         await prisma.master.update({
           where: { id: masterId },
           data: { status: "PROCESSING" },
         });
+        await updateProgress(masterId, 50, "Preparing source...");
 
         srcPath = pathCache.get(masterId);
         if (srcPath) pathCache.delete(masterId);
@@ -112,6 +130,7 @@ if (redisConnection) {
           await fsp.writeFile(srcPath, buf);
         }
         marks.push(T("get_src"));
+        await updateProgress(masterId, 55, "Source loaded — sending to engine...");
 
         const srcStat = await fsp.stat(srcPath);
         if (srcStat.size > 100 * 1024 * 1024) {
@@ -142,6 +161,8 @@ if (redisConnection) {
           artworkUrl: master.metadata?.artworkUrl,
         });
 
+        await updateProgress(masterId, 60, "Mastering engine processing...");
+
         console.log(
           "[QUICK MASTER] POST /master — file=%s size=%d bytes",
           master.sourceName,
@@ -168,6 +189,7 @@ if (redisConnection) {
         }
         clearTimeout(timeoutId);
         marks.push(T("python_done"));
+        await updateProgress(masterId, 85, "Writing mastered output...");
 
         if (!pythonResponse.ok) {
           const errorText = await pythonResponse.text();
@@ -195,6 +217,7 @@ if (redisConnection) {
           fileStream.on("error", reject);
         });
         marks.push(T("write_local"));
+        await updateProgress(masterId, 95, "Finalizing...");
 
         downloadCache.set(masterId, tmpPath);
 
@@ -255,10 +278,14 @@ if (redisConnection) {
         })();
 
         if (master.user?.email) {
+          const downloadToken = createAccessToken(master.userId);
+          const frontendUrl = env.FRONTEND_URL.replace(/\/+$/, "");
+          const downloadUrl = `${frontendUrl}/api/masters/${masterId}/download?token=${encodeURIComponent(downloadToken)}`;
+          const dashboardUrl = `${frontendUrl}/pages/profile.html`;
           await sendEmail({
             to: master.user.email,
-            subject: "Your Stemy master is ready",
-            html: `<p>Your mastered track <strong>${master.sourceName}</strong> is ready to download from your dashboard.</p>`,
+            subject: "Your Stemy master is ready — Download Now",
+            html: masterReadyEmail(master.sourceName, downloadUrl, dashboardUrl),
           });
         }
 
