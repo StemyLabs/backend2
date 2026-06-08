@@ -45,6 +45,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("stemy.api")
+log.info("WEB_CONCURRENCY=%s", os.environ.get("WEB_CONCURRENCY", "(not set)"))
 
 # ─── Flask app ────────────────────────────────────────────────────────────────
 app = Flask(__name__)
