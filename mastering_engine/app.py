@@ -24,6 +24,9 @@ from __future__ import annotations
 
 import logging
 import os
+
+from dotenv import load_dotenv
+load_dotenv()
 import time
 import urllib.request
 from pathlib import Path
