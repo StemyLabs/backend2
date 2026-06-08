@@ -42,7 +42,7 @@ const LAYOUT = (content) => `
           </tr>
           <tr>
             <td align="center" style="padding:20px 32px 32px;font-family:'DM Mono','JetBrains Mono',monospace,Consolas,sans-serif;font-size:11px;line-height:1.6;color:#404049;text-transform:uppercase;letter-spacing:0.1em;">
-              STEMY AI Mastering LLC &bull; 2026<br>
+              STEMY Labs &bull; 2026<br>
               <span style="color:#4FE9A1;">Built for artists. Engineered to hit.</span>
             </td>
           </tr>
@@ -118,7 +118,7 @@ export const cancellationScheduledEmail = (firstName, periodEnd, url) => LAYOUT(
   <h1 style="font-family:'Syne','Unbounded',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:22px;font-weight:700;line-height:1.2;color:#ff8c42;margin:0 0 16px 0;">Your trial has been cancelled</h1>
   <p style="margin:0 0 12px 0;color:#9ca3af;">Hey ${firstName || 'artist'},</p>
   <p style="margin:0 0 16px 0;color:#9ca3af;">Your Stemy trial has been cancelled. You will continue to have access until <strong style="color:#f0f2f7;">${periodEnd}</strong>.</p>
-  <p style="margin:0 0 12px 0;color:#9ca3af;">After this date, your subscription will end and you&rsquo;ll lose access to AI mastering.</p>
+  <p style="margin:0 0 12px 0;color:#9ca3af;">After this date, your subscription will end and you&rsquo;ll lose access to mastering. No further charges will be made.</p>
   <p style="margin:0 0 12px 0;color:#9ca3af;font-weight:600;">If you change your mind, you can resubscribe anytime before ${periodEnd}:</p>
   <table role="presentation" border="0" cellpadding="0" cellspacing="0">
     <tr>
@@ -133,7 +133,7 @@ export const cancellationScheduledEmail = (firstName, periodEnd, url) => LAYOUT(
 export const cancellationEmail = (firstName, url) => LAYOUT(`
   <h1 style="font-family:'Syne','Unbounded',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:22px;font-weight:700;line-height:1.2;color:#f0f2f7;margin:0 0 16px 0;">Your subscription has ended</h1>
   <p style="margin:0 0 12px 0;color:#9ca3af;">Hey ${firstName || 'artist'},</p>
-  <p style="margin:0 0 16px 0;color:#9ca3af;">Your Stemy subscription has ended. Your access to AI mastering has been revoked.</p>
+  <p style="margin:0 0 16px 0;color:#9ca3af;">Your Stemy subscription has ended. Your access to mastering has been revoked.</p>
   <p style="margin:0 0 12px 0;color:#9ca3af;font-weight:600;">Ready to come back? You can resubscribe anytime:</p>
   <table role="presentation" border="0" cellpadding="0" cellspacing="0">
     <tr>
@@ -156,7 +156,7 @@ export const subscriptionWelcomeEmail = (firstName, plan, trialEndsAt, url) => {
   <p style="margin:0 0 12px 0;color:#9ca3af;">Hey ${firstName || 'artist'},</p>
   ${hasTrial
     ? `<p style="margin:0 0 16px 0;color:#9ca3af;">Your ${plan === 'PRO' ? 'Pro' : 'Basic'} subscription is active with a free trial. Your first payment will be processed on <strong style="color:#f0f2f7;">${endDate}</strong>.</p>`
-    : `<p style="margin:0 0 16px 0;color:#9ca3af;">Your ${plan === 'PRO' ? 'Pro' : 'Basic'} subscription is now active. You have full access to AI mastering.</p>`
+    : `<p style="margin:0 0 16px 0;color:#9ca3af;">Your ${plan === 'PRO' ? 'Pro' : 'Basic'} subscription is now active. You now have access to STEMY's studio-powered mastering engine.</p>`
   }
   <p style="margin:0 0 12px 0;color:#9ca3af;font-weight:600;">Here&rsquo;s what you can do now:</p>
   <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;">
@@ -202,7 +202,7 @@ export const trialEndingEmail = (firstName, trialEndsAt, frontendUrl) => LAYOUT(
   <p style="margin:0 0 16px 0;color:#9ca3af;">Your 7-day free trial will end on <strong style="color:#f0f2f7;">${trialEndsAt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</strong>.</p>
   <p style="margin:0 0 12px 0;color:#9ca3af;font-weight:600;">Don't lose access to:</p>
   <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;">
-    <tr><td style="padding:4px 0;color:#9ca3af;font-size:14px;">&bull; Unlimited AI-powered mastering</td></tr>
+    <tr><td style="padding:4px 0;color:#9ca3af;font-size:14px;">&bull; Unlimited studio-powered mastering</td></tr>
     <tr><td style="padding:4px 0;color:#9ca3af;font-size:14px;">&bull; Genre-specific mastering chains</td></tr>
     <tr><td style="padding:4px 0;color:#9ca3af;font-size:14px;">&bull; High-quality 24-bit WAV downloads</td></tr>
   </table>

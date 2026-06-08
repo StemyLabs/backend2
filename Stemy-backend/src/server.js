@@ -11,19 +11,22 @@ import webhookRoutes from "./routes/webhook.routes.js";
 import masterRoutes from "./routes/master.routes.js";
 
 import { startTrialReminderCron } from "./cron/trial-reminder.js";
-import { startPythonServer, stopPythonServer } from "./services/python-server.js";
+import {
+  startPythonServer,
+  stopPythonServer,
+} from "./services/python-server.js";
 
 assertRequiredEnvForProd();
 
 const app = express();
-const PORT = env.PORT || 5500;
+const PORT = env.PORT || 8000;
 app.set("trust proxy", 1);
 
 const allowedOriginsSet = new Set([
   "http://localhost:8080",
-  "http://localhost:5500",
+  "http://localhost:8000",
   "http://localhost:5501",
-  "http://127.0.0.1:5500",
+  "http://127.0.0.1:8000",
   "http://127.0.0.1:5501",
   "http://127.0.0.1:8080",
 ]);
@@ -33,7 +36,9 @@ try {
   if (u.hostname === "localhost" && u.port) {
     allowedOriginsSet.add(`${u.protocol}//127.0.0.1:${u.port}`);
   }
-} catch { /* ignore */ }
+} catch {
+  /* ignore */
+}
 const allowedOrigins = [...allowedOriginsSet].filter(Boolean);
 
 app.use((req, res, next) => {
@@ -67,9 +72,7 @@ app.use(
 app.use(express.json({ limit: "110mb" }));
 app.use("/api/masters", masterRoutes);
 
-app.use(
-  rateLimit({ windowMs: 15 * 60 * 1000, max: 200 }),
-);
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 200 }));
 
 app.get("/", (req, res) => {
   res.json({ message: "Stemy API is running Fine...", timestamp: Date.now() });
@@ -97,7 +100,7 @@ let keepAliveInterval = null;
 export const startServer = async () => {
   try {
     await startPythonServer();
-    
+
     server = app.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on port ${PORT}`);
       startTrialReminderCron();
@@ -114,7 +117,8 @@ export const startServer = async () => {
   }
 };
 
-const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+const isDirectRun =
+  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isDirectRun) {
   startServer();
 }
@@ -127,4 +131,4 @@ process.on("uncaughtException", (err) => {
   console.error("Uncaught exception:", err);
 });
 
-export default app;  
+export default app;

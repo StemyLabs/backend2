@@ -9,7 +9,9 @@ export const startTrialReminderCron = () => {
   cron.schedule("0 9 * * *", async () => {
     try {
       const threeDaysFromNow = new Date();
-      threeDaysFromNow.setDate(threeDaysFromNow.getDate() + TRAIL_END_REMINDER_DAYS);
+      threeDaysFromNow.setDate(
+        threeDaysFromNow.getDate() + TRAIL_END_REMINDER_DAYS,
+      );
       threeDaysFromNow.setHours(23, 59, 59, 999);
 
       const threeDaysAgo = new Date();
@@ -30,18 +32,27 @@ export const startTrialReminderCron = () => {
 
       if (subscriptions.length === 0) return;
 
-      console.log(`🔔 Sending trial ending reminders to ${subscriptions.length} user(s)`);
+      console.log(
+        `🔔 Sending trial ending reminders to ${subscriptions.length} user(s)`,
+      );
 
       for (const sub of subscriptions) {
         try {
           await sendEmail({
             to: sub.user.email,
             subject: "Your Stemy trial ends in 3 days",
-            html: trialEndingEmail(sub.user.firstName, sub.trialEndsAt, process.env.FRONTEND_URL || 'http://localhost:5500'),
+            html: trialEndingEmail(
+              sub.user.firstName,
+              sub.trialEndsAt,
+              process.env.FRONTEND_URL || "http://localhost:8000",
+            ),
           });
           console.log(`  ✓ Reminder sent to ${sub.user.email}`);
         } catch (err) {
-          console.error(`  ✗ Failed to send reminder to ${sub.user.email}:`, err.message);
+          console.error(
+            `  ✗ Failed to send reminder to ${sub.user.email}:`,
+            err.message,
+          );
         }
       }
     } catch (error) {

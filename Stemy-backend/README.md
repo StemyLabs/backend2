@@ -1,6 +1,7 @@
 # Stemy Backend (MVP)
 
 Express + Prisma backend for Stemy SaaS with:
+
 - Custom JWT auth (email/password, verify email, forgot/reset password)
 - Stripe subscriptions (checkout, portal, webhook sync)
 - Quick Master workflow scaffold (upload, queue, status, download)
@@ -46,6 +47,7 @@ npm run db:migrate
 ```bash
 npm test
 ```
+
 # Stemy Authentication Backend
 
 Complete authentication backend with email/password login, Google OAuth, email verification, and password reset.
@@ -189,7 +191,7 @@ Content-Type: application/json
 2. Create a new project or select existing
 3. Go to "Credentials" → "Create Credentials" → "OAuth 2.0 Client ID"
 4. Configure consent screen (External)
-5. Add authorized JavaScript origins for each dev URL you use (e.g. `http://localhost:5500` for Live Server, `http://localhost:8080` if you use another static port)
+5. Add authorized JavaScript origins for each dev URL you use (e.g. `http://localhost:8000` for Live Server, `http://localhost:8080` if you use another static port)
 6. Copy Client ID and Client Secret to `.env`
 
 ## Setup Email (Resend)

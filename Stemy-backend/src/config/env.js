@@ -4,14 +4,16 @@ import { z } from "zod";
 dotenv.config();
 
 const envSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  NODE_ENV: z
+    .enum(["development", "test", "production"])
+    .default("development"),
   PORT: z.coerce.number().default(3000),
   PYTHON_ENGINE_URL: z.string().default("http://localhost:5050"),
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(16),
   JWT_EXPIRES_IN: z.string().default("7d"),
   GOOGLE_CLIENT_ID: z.string().optional(),
-  FRONTEND_URL: z.string().url().default("http://localhost:5500"),
+  FRONTEND_URL: z.string().url().default("http://localhost:8000"),
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   STRIPE_BASIC_PRICE_ID: z.string().optional(),
@@ -41,6 +43,8 @@ export const assertRequiredEnvForProd = () => {
   const required = ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "REDIS_URL"];
   const missing = required.filter((key) => !process.env[key]);
   if (missing.length) {
-    throw new Error(`Missing required production env vars: ${missing.join(", ")}`);
+    throw new Error(
+      `Missing required production env vars: ${missing.join(", ")}`,
+    );
   }
 };
