@@ -1,7 +1,7 @@
 import express from "express";
 import multer from "multer";
 import { authMiddleware } from "../middleware/auth.middleware.js";
-import { getMasterTmpDir } from "../utils/master-temp.js";
+import { MASTER_TMP_DIR } from "../utils/master-temp.js";
 import {
   createQuickMaster,
   listMasters,
@@ -12,7 +12,7 @@ import {
 const router = express.Router();
 const upload = multer({
   storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, getMasterTmpDir()),
+    destination: (_req, _file, cb) => cb(null, MASTER_TMP_DIR),
     filename: (_req, file, cb) => {
       const safe = file.originalname.replace(/[^\w.\-]+/g, "_");
       cb(null, `${Date.now()}-${safe}`);

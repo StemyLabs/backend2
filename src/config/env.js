@@ -9,13 +9,6 @@ const envSchema = z.object({
     .default("development"),
   PORT: z.coerce.number().default(3000),
   PYTHON_ENGINE_URL: z.string().default("http://localhost:5050"),
-  /** VPS: run mastering_engine/cli_master.py on disk paths (no HTTP re-upload). */
-  PYTHON_USE_LOCAL_CLI: z
-    .string()
-    .default("true")
-    .transform((v) => !["false", "0", "no"].includes(String(v).toLowerCase())),
-  PYTHON_BIN: z.string().default("python3"),
-  PYTHON_CLI_PATH: z.string().optional(),
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(16),
   JWT_EXPIRES_IN: z.string().default("7d"),
@@ -36,6 +29,7 @@ const envSchema = z.object({
   R2_SECRET_ACCESS_KEY: z.string().optional(),
   R2_BUCKET: z.string().optional(),
   R2_PUBLIC_BASE_URL: z.string().url().optional(),
+  WORKER_CONCURRENCY: z.coerce.number().min(1).default(2),
   APP_BASE_URL: z.string().url().default("http://localhost:3000"),
 });
 

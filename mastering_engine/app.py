@@ -29,12 +29,11 @@ import urllib.request
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file, abort
-from werkzeug.exceptions import HTTPException
 from flask_cors import CORS
 
 from genres import GENRES, DEFAULT_GENRE, get_preset
 from dsp_chain import master_audio_file, TARGET_LUFS, TARGET_TP_DB
-from io_stream import STEMY_TEMP_DIR, safe_unlink, temp_path
+from io_stream import safe_unlink, temp_path
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -68,8 +67,7 @@ def _cors_headers() -> dict:
     return {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Expose-Headers":
-            "X-Lufs-Actual, X-Tp-Actual, X-DR-Actual, X-Duration-Actual, X-Genre, "
-            "X-Processing-Time-Ms, X-Stemy-Quality, X-Output-Format",
+            "X-Lufs-Actual, X-Tp-Actual, X-DR-Actual, X-Duration-Actual, X-Genre, X-Processing-Time-Ms",
     }
 
 
@@ -217,11 +215,9 @@ def master():
             metadata=metadata,
             artwork_bytes=art_bytes,
         )
-        out_done = Path(analysis.get("output_path", out_path))
         log.info(
-            "[QUICK MASTER] Audio processing completed. Output size: %d bytes (%s)",
-            out_done.stat().st_size,
-            analysis.get("engine", analysis.get("quality", "?")),
+            "[QUICK MASTER] Audio processing completed. Output size: %d bytes",
+            out_path.stat().st_size,
         )
     except ValueError as exc:
         safe_unlink(in_path)
@@ -243,32 +239,28 @@ def master():
         safe_unlink(in_path)
 
     elapsed_ms = int((time.perf_counter() - t_start) * 1000)
-    out_file = Path(analysis.get("output_path", out_path))
-    out_fmt = analysis.get("output_format", "wav")
-    out_size = out_file.stat().st_size
+    out_size = out_path.stat().st_size
 
     log.info(
-        "Done — genre=%s lufs=%.1f dbtp=%.2f dr=%.1f elapsed=%d ms output=%d KB (%s)",
+        "Done — genre=%s lufs=%.1f dbtp=%.2f dr=%.1f elapsed=%d ms output=%d KB",
         genre,
         analysis["lufs"],
         analysis["dbtp"],
         analysis["dr"],
         elapsed_ms,
         out_size // 1024,
-        analysis.get("quality", "standard"),
     )
 
     stem = Path(f.filename).stem
-    ext = ".flac" if out_fmt == "flac" else ".wav"
-    mime = "audio/flac" if out_fmt == "flac" else "audio/wav"
+    download_name = f"{stem}_mastered_{genre}.wav"
 
     response = send_file(
-        out_file,
-        mimetype=mime,
+        out_path,
+        mimetype="audio/wav",
         as_attachment=True,
-        download_name=f"{stem}_mastered_{genre}{ext}",
+        download_name=download_name,
     )
-    response.call_on_close(lambda: safe_unlink(out_file))
+    response.call_on_close(lambda: safe_unlink(out_path))
     response.headers.update({
         **_cors_headers(),
         "X-Genre":               genre,
@@ -277,87 +269,9 @@ def master():
         "X-DR-Actual":           str(analysis["dr"]),
         "X-Duration-Actual":     str(analysis["duration"]),
         "X-Processing-Time-Ms":  str(elapsed_ms),
-        "X-Stemy-Quality":       analysis.get("quality", "standard"),
-        "X-Output-Format":       out_fmt,
         "Cache-Control":         "no-store",
     })
     return response
-
-
-@app.route("/master/local", methods=["POST"])
-def master_local():
-    """Co-located VPS: master file already on disk under STEMY_TEMP_DIR (no upload)."""
-    if os.environ.get("STEMY_ALLOW_LOCAL_PATH", "1") != "1":
-        abort(403, description="Local path mastering is disabled.")
-
-    body = request.get_json(silent=True) or {}
-    raw_path = body.get("path")
-    raw_out = body.get("output_path")
-    genre = (body.get("genre") or DEFAULT_GENRE).strip().lower()
-    if not raw_path:
-        abort(400, description="Missing 'path'.")
-
-    def _path_under_temp(raw: str) -> Path:
-        p = Path(raw).resolve()
-        root = STEMY_TEMP_DIR.resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        # Must match Node STEMY_TEMP_DIR (e.g. /var/lib/stemy/masters)
-        try:
-            common = os.path.commonpath([str(p), str(root)])
-        except ValueError as exc:
-            abort(403, description=f"Path not allowed: {exc}")
-        if common != str(root):
-            abort(
-                403,
-                description=(
-                    f"Path not under STEMY_TEMP_DIR ({root}). "
-                    f"Set STEMY_TEMP_DIR on Python to match Node (/var/lib/stemy/masters)."
-                ),
-            )
-        return p
-
-    try:
-        in_path = _path_under_temp(raw_path)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        log.exception("Invalid input path %s: %s", raw_path, exc)
-        abort(400, description=f"Invalid path: {exc}")
-
-    if not in_path.is_file():
-        abort(404, description="Input file not found.")
-
-    out_ext = os.environ.get("STEMY_OUTPUT_EXT", ".flac").lower()
-    if raw_out:
-        try:
-            out_path = _path_under_temp(raw_out)
-        except HTTPException:
-            raise
-        except Exception as exc:
-            log.exception("Invalid output path %s: %s", raw_out, exc)
-            abort(400, description=f"Invalid output_path: {exc}")
-    else:
-        out_path = temp_path(f"_out{out_ext}")
-    t_start = time.perf_counter()
-    try:
-        analysis = master_audio_file(in_path, out_path, genre=genre)
-    except ValueError as exc:
-        safe_unlink(out_path)
-        abort(413, description=str(exc))
-    except Exception as exc:
-        safe_unlink(out_path)
-        log.exception("Local master failed: %s", exc)
-        abort(500, description=str(exc))
-
-    elapsed_ms = int((time.perf_counter() - t_start) * 1000)
-    out_file = Path(analysis.get("output_path", out_path))
-    out_fmt = analysis.get("output_format", "wav")
-    return jsonify({
-        **analysis,
-        "processing_ms": elapsed_ms,
-        "output_path": str(out_file),
-        "output_format": out_fmt,
-    })
 
 
 # ─── JSON error handlers ──────────────────────────────────────────────────────

@@ -5,18 +5,8 @@ import https from "https";
 import http from "http";
 import fs from "fs";
 import fsp from "fs/promises";
-import path from "path";
 
 const ALLOWED_PLANS = ["BASIC", "PRO"];
-
-function masteredDownloadName(sourceName, filePathOrUrl) {
-  const base = sourceName?.replace(/\.[^.]+$/, "") || "track";
-  const ext = path.extname(String(filePathOrUrl || "")).toLowerCase();
-  if (ext === ".flac") {
-    return { filename: `mastered-${base}.flac`, contentType: "audio/flac" };
-  }
-  return { filename: `mastered-${base}.wav`, contentType: "audio/wav" };
-}
 
 const checkUserPlan = async (userId) => {
   const subscription = await prisma.subscription.findFirst({
@@ -52,18 +42,18 @@ export const createQuickMaster = async (req, res) => {
     console.log("[QUICK MASTER] New Quick Master request received");
     console.log("[QUICK MASTER] Request user ID:", req.userId);
     console.log("[QUICK MASTER] Request body keys:", Object.keys(req.body));
-    const file = req.files?.audio?.[0] || req.file;
     console.log(
       "[QUICK MASTER] Request file info:",
-      file
+      req.file
         ? {
-            originalname: file.originalname,
-            mimetype: file.mimetype,
-            size: file.size,
-            path: file.path || "(no disk path)",
+            originalname: req.file.originalname,
+            mimetype: req.file.mimetype,
+            size: req.file.size,
           }
         : "No file",
     );
+
+    const file = req.files?.audio?.[0] || req.file;
     const { genre, metadata: metadataRaw } = req.body;
     const artwork = req.files?.artwork?.[0] || null;
 
@@ -82,12 +72,6 @@ export const createQuickMaster = async (req, res) => {
     if (file.mimetype && !ALLOWED_MIME.has(file.mimetype)) {
       console.error("[QUICK MASTER] Unsupported MIME type:", file.mimetype);
       return res.status(400).json({ message: "Unsupported audio format" });
-    }
-    if (!file.path || !fs.existsSync(file.path)) {
-      console.error("[QUICK MASTER] Upload missing on disk:", file.path);
-      return res.status(400).json({
-        message: "Upload did not land on disk. Try again in a few seconds.",
-      });
     }
 
     // Parse metadata and handle artwork
@@ -134,16 +118,20 @@ export const createQuickMaster = async (req, res) => {
     console.log("[QUICK MASTER] Database record created with ID:", master.id);
 
     console.log("[QUICK MASTER] Enqueuing mastering job (async)...");
-    void enqueueMasteringJob(master.id, file.path, file.originalname).catch((err) => {
+    void enqueueMasteringJob(master.id, file.path || null).catch((err) => {
       console.error("[QUICK MASTER] enqueueMasteringJob failed:", err?.message || err);
     });
-    console.log("[QUICK MASTER] Master %s returned QUEUED — client should poll GET /masters/:id", master.id);
+    console.log(
+      "[QUICK MASTER] Master %s returned QUEUED — client polls GET /masters/:id",
+      master.id,
+    );
 
     return res.status(201).json({ master });
   } catch (error) {
     console.error("Create quick master error:", error);
-    const msg = error?.message || "Failed to create quick master job";
-    return res.status(500).json({ message: msg });
+    return res
+      .status(500)
+      .json({ message: "Failed to create quick master job" });
   }
 };
 
@@ -179,11 +167,8 @@ export const getMasterDownload = async (req, res) => {
   // Check local temp cache first (fastest)
   const localPath = getLocalDownloadPath(master.id);
   if (localPath && fs.existsSync(localPath)) {
-    const { filename, contentType } = masteredDownloadName(
-      master.sourceName,
-      localPath,
-    );
-    res.setHeader("Content-Type", contentType);
+    const filename = `mastered-${master.sourceName?.replace(/\.[^.]+$/, "") || "track"}.wav`;
+    res.setHeader("Content-Type", "audio/wav");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Cache-Control", "no-store");
     const stream = fs.createReadStream(localPath);
@@ -207,11 +192,8 @@ export const getMasterDownload = async (req, res) => {
     const tmpDir = pathLib.join(os.tmpdir(), "stemy-masters");
     const diskPath = pathLib.join(tmpDir, pathLib.basename(localKey));
     if (fs.existsSync(diskPath)) {
-      const { filename, contentType } = masteredDownloadName(
-        master.sourceName,
-        diskPath,
-      );
-      res.setHeader("Content-Type", contentType);
+      const filename = `mastered-${master.sourceName?.replace(/\.[^.]+$/, "") || "track"}.wav`;
+      res.setHeader("Content-Type", "audio/wav");
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
       res.setHeader("Cache-Control", "no-store");
       const stream = fs.createReadStream(diskPath);
@@ -227,13 +209,9 @@ export const getMasterDownload = async (req, res) => {
   const signedUrl = await getDownloadUrl(master.outputUrl);
   
   const urlObj = new URL(master.outputUrl);
-  const urlName = urlObj.pathname.split("/").pop() || "mastered-track.wav";
-  const { filename, contentType } = masteredDownloadName(
-    master.sourceName,
-    urlName,
-  );
-
-  res.setHeader("Content-Type", contentType);
+  const filename = urlObj.pathname.split("/").pop() || "mastered-track.wav";
+  
+  res.setHeader("Content-Type", "audio/wav");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.setHeader("Cache-Control", "no-store");
   
