@@ -1,3 +1,4 @@
+import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { uploadBuffer, uploadStream, getDownloadUrl } from "../services/storage.service.js";
 import { enqueueMasteringJob, getLocalDownloadPath } from "../services/queue.service.js";
@@ -102,7 +103,34 @@ export const createQuickMaster = async (req, res) => {
       console.log("[QUICK MASTER] Artwork uploaded to:", artUrl);
     }
 
-    console.log("[QUICK MASTER] Creating database record (source R2 upload deferred)...");
+    let sourceUrl;
+    const isVps = env.IS_VPS === "true";
+
+    if (isVps) {
+      sourceUrl = `local://pending/${req.userId}`;
+      console.log("[QUICK MASTER] VPS mode — using local source path");
+    } else {
+      const sourceKey = `masters/${req.userId}/${Date.now()}-${file.originalname}`;
+      if (file.path) {
+        const srcStat = await fsp.stat(file.path);
+        sourceUrl = await uploadStream({
+          key: sourceKey,
+          stream: fs.createReadStream(file.path),
+          contentType: file.mimetype || "application/octet-stream",
+          contentLength: srcStat.size,
+        });
+        await fsp.unlink(file.path).catch(() => {});
+      } else {
+        sourceUrl = await uploadBuffer({
+          key: sourceKey,
+          body: file.buffer,
+          contentType: file.mimetype || "application/octet-stream",
+        });
+      }
+      console.log("[QUICK MASTER] Source uploaded to:", sourceUrl);
+    }
+
+    console.log("[QUICK MASTER] Creating database record...");
     const master = await prisma.master.create({
       data: {
         userId: req.userId,
@@ -111,14 +139,14 @@ export const createQuickMaster = async (req, res) => {
         sourceName: file.originalname,
         sourceMime: file.mimetype || "application/octet-stream",
         sourceSize: file.size,
-        sourceUrl: `local://pending/${req.userId}`,
+        sourceUrl,
         metadata: parsedMetadata,
       },
     });
     console.log("[QUICK MASTER] Database record created with ID:", master.id);
 
     console.log("[QUICK MASTER] Enqueuing mastering job (async)...");
-    void enqueueMasteringJob(master.id, file.path || null).catch((err) => {
+    void enqueueMasteringJob(master.id, isVps ? (file.path || null) : null).catch((err) => {
       console.error("[QUICK MASTER] enqueueMasteringJob failed:", err?.message || err);
     });
     console.log(

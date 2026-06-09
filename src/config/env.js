@@ -31,6 +31,7 @@ const envSchema = z.object({
   R2_PUBLIC_BASE_URL: z.string().url().optional(),
   WORKER_CONCURRENCY: z.coerce.number().min(1).default(2),
   APP_BASE_URL: z.string().url().default("http://localhost:3000"),
+  IS_VPS: z.string().default("false"),
 });
 
 export const env = envSchema.parse(process.env);
