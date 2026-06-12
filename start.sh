@@ -1,13 +1,18 @@
 #!/bin/bash
 set -e
 
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+PYTHON="${ROOT}/venv/bin/python3"
+if [ ! -x "$PYTHON" ]; then
+  PYTHON="python3"
+fi
+
 # Start Python mastering engine in background (completely detached)
-# Using nohup and redirecting all output to prevent Render from detecting the port
 if [ "$NODE_ENV" = "production" ]; then
-    echo "Starting Python mastering engine..."
-    nohup python3 -c "
+    echo "Starting Python mastering engine ($PYTHON)..."
+    nohup "$PYTHON" -c "
 import sys
-sys.path.insert(0, 'mastering_engine')
+sys.path.insert(0, '${ROOT}/mastering_engine')
 from app import app
 app.run(host='127.0.0.1', port=5050, threaded=True)
 " > /tmp/python.log 2>&1 &
