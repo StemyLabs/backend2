@@ -7,8 +7,8 @@ import { prisma } from "../lib/prisma.js";
 import { sendEmail } from "../utils/email.js";
 import { masterReadyEmail } from "../utils/email-templates.js";
 import { createAccessToken } from "../utils/tokens.js";
-import { MASTER_TMP_DIR } from "../utils/master-temp.js";
-import { getDownloadUrl, uploadStream } from "./storage.service.js";
+import { MASTER_TMP_DIR, getMasterOutputPath } from "../utils/master-temp.js";
+import { getDownloadUrl, uploadStream, readLocalStorage } from "./storage.service.js";
 import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
@@ -22,6 +22,7 @@ export const masteringQueue = redisConnection
   : null;
 
 const pathCache = new Map();
+const artworkPathCache = new Map();
 const downloadCache = new Map();
 
 const safeUnlink = (filePath) => {
@@ -42,6 +43,93 @@ const updateProgress = async (masterId, progress, label) => {
   }
 };
 
+const METADATA_SKIP_KEYS = new Set(["artworkUrl", "progress", "progressLabel"]);
+
+const cleanMetadataForEngine = (metadata) => {
+  if (!metadata || typeof metadata !== "object") return null;
+  const cleaned = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (METADATA_SKIP_KEYS.has(key)) continue;
+    if (value == null || String(value).trim() === "") continue;
+    cleaned[key] = value;
+  }
+  return Object.keys(cleaned).length ? cleaned : null;
+};
+
+const buildEngineMetadata = (metadata) => {
+  const cleaned = cleanMetadataForEngine(metadata) || {};
+  // Keep artworkUrl for Python fallback fetch if multipart artwork is missing.
+  if (metadata?.artworkUrl) {
+    cleaned.artworkUrl = metadata.artworkUrl;
+  }
+  return Object.keys(cleaned).length ? cleaned : null;
+};
+
+const loadArtworkBuffer = async (master, masterId) => {
+  const cachedPath = artworkPathCache.get(masterId);
+  if (cachedPath) {
+    artworkPathCache.delete(masterId);
+    if (fs.existsSync(cachedPath)) {
+      try {
+        const buf = await fsp.readFile(cachedPath);
+        await fsp.unlink(cachedPath).catch(() => {});
+        console.log("[QUICK MASTER] Artwork loaded from job cache:", buf.length, "bytes");
+        return buf;
+      } catch (err) {
+        console.warn("[QUICK MASTER] Failed to read cached artwork:", err.message);
+      }
+    }
+  }
+
+  const artUrl = master.metadata?.artworkUrl;
+  if (!artUrl) {
+    console.log("[QUICK MASTER] No artwork URL on master record");
+    return null;
+  }
+
+  try {
+    if (artUrl.startsWith("local://")) {
+      const buf = await readLocalStorage(artUrl);
+      if (buf) {
+        console.log("[QUICK MASTER] Artwork loaded from local storage:", buf.length, "bytes");
+        return buf;
+      }
+      console.warn("[QUICK MASTER] Local artwork missing:", artUrl);
+      return null;
+    }
+
+    // Public R2 URLs are directly fetchable; signed URL is fallback.
+    if (artUrl.startsWith("http://") || artUrl.startsWith("https://")) {
+      const directResp = await fetch(artUrl);
+      if (directResp.ok) {
+        const buf = Buffer.from(await directResp.arrayBuffer());
+        console.log("[QUICK MASTER] Artwork fetched (public URL):", buf.length, "bytes");
+        return buf;
+      }
+    }
+
+    const artSignedUrl = await getDownloadUrl(artUrl);
+    const artResp = await fetch(artSignedUrl);
+    if (artResp.ok) {
+      const buf = Buffer.from(await artResp.arrayBuffer());
+      console.log("[QUICK MASTER] Artwork downloaded (signed URL):", buf.length, "bytes");
+      return buf;
+    }
+    console.warn("[QUICK MASTER] Artwork download failed:", artResp.status, artResp.statusText);
+  } catch (artErr) {
+    console.warn("[QUICK MASTER] Failed to download artwork:", artErr.message);
+  }
+
+  return null;
+};
+
+const detectImageMime = (buf) => {
+  if (!buf || buf.byteLength < 4) return "image/jpeg";
+  const b = Buffer.from(buf);
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
+  return "image/jpeg";
+};
+
 /** Native FormData + file Blob (undici fetch; npm form-data streams break Readable.toWeb). */
 const buildMasterFormData = async ({
   srcPath,
@@ -50,7 +138,6 @@ const buildMasterFormData = async ({
   genre,
   metadata,
   artBuf,
-  artworkUrl,
 }) => {
   const formData = new FormData();
   const mime = sourceMime || "application/octet-stream";
@@ -72,8 +159,7 @@ const buildMasterFormData = async ({
   }
 
   if (artBuf) {
-    const artUrl = artworkUrl || "";
-    const artMime = artUrl.endsWith(".png") ? "image/png" : "image/jpeg";
+    const artMime = detectImageMime(artBuf);
     const ext = artMime === "image/png" ? "png" : "jpg";
     formData.append("artwork", new Blob([artBuf], { type: artMime }), `cover.${ext}`);
   }
@@ -137,29 +223,24 @@ if (redisConnection) {
           throw new Error("File too large. Maximum size is 100MB");
         }
 
-        let artBuf = null;
-        if (master.metadata?.artworkUrl) {
-          try {
-            const artSignedUrl = await getDownloadUrl(master.metadata.artworkUrl);
-            const artResp = await fetch(artSignedUrl);
-            if (artResp.ok) {
-              artBuf = await artResp.arrayBuffer();
-              console.log("[QUICK MASTER] Artwork downloaded:", artBuf.byteLength, "bytes");
-            }
-          } catch (artErr) {
-            console.warn("[QUICK MASTER] Failed to download artwork:", artErr.message);
-          }
-        }
+        let artBuf = await loadArtworkBuffer(master, masterId);
 
+        const engineMetadata = buildEngineMetadata(master.metadata);
         const formData = await buildMasterFormData({
           srcPath,
           sourceName: master.sourceName,
           sourceMime: master.sourceMime,
           genre: master.genre,
-          metadata: master.metadata,
+          metadata: engineMetadata,
           artBuf,
-          artworkUrl: master.metadata?.artworkUrl,
         });
+
+        console.log(
+          "[QUICK MASTER] Sending to engine — audio=%d bytes, artwork=%s, metadata=%s",
+          srcStat.size,
+          artBuf ? `${artBuf.length} bytes` : "none",
+          engineMetadata ? Object.keys(engineMetadata).join(", ") : "none",
+        );
 
         await updateProgress(masterId, 60, "Mastering engine processing...");
 
@@ -203,7 +284,7 @@ if (redisConnection) {
         const pyTime = pythonResponse.headers.get("X-Processing-Time-Ms");
 
         const outputKey = `masters/${master.userId}/${Date.now()}-mastered-${master.sourceName}`;
-        const tmpPath = path.join(MASTER_TMP_DIR, `${masterId}.wav`);
+        const tmpPath = getMasterOutputPath(masterId);
         const outputLength = parseInt(pythonResponse.headers.get("content-length"), 10) || undefined;
 
         const webStream = pythonResponse.body;
@@ -223,7 +304,16 @@ if (redisConnection) {
 
         await prisma.master.update({
           where: { id: masterId },
-          data: { status: "COMPLETE", completedAt: new Date(), lufs, dbtp, dr, duration },
+          data: {
+            status: "COMPLETE",
+            completedAt: new Date(),
+            lufs,
+            dbtp,
+            dr,
+            duration,
+            // Local path is available immediately; R2 URL replaces this after background upload.
+            outputUrl: `local://${masterId}.wav`,
+          },
         });
         marks.push(T("db_update"));
 
@@ -323,7 +413,7 @@ if (redisConnection) {
   });
 }
 
-export const enqueueMasteringJob = async (masterId, sourcePath) => {
+export const enqueueMasteringJob = async (masterId, sourcePath, artworkPath = null) => {
   if (sourcePath && fs.existsSync(sourcePath)) {
     const ext = path.extname(sourcePath) || ".audio";
     const dest = path.join(MASTER_TMP_DIR, `${masterId}-source${ext}`);
@@ -334,6 +424,19 @@ export const enqueueMasteringJob = async (masterId, sourcePath) => {
       await fsp.unlink(sourcePath).catch(() => {});
     }
     pathCache.set(masterId, dest);
+  }
+
+  if (artworkPath && fs.existsSync(artworkPath)) {
+    const ext = path.extname(artworkPath) || ".jpg";
+    const dest = path.join(MASTER_TMP_DIR, `${masterId}-artwork${ext}`);
+    try {
+      await fsp.rename(artworkPath, dest);
+    } catch {
+      await fsp.copyFile(artworkPath, dest);
+      await fsp.unlink(artworkPath).catch(() => {});
+    }
+    artworkPathCache.set(masterId, dest);
+    console.log("[QUICK MASTER] Artwork cached for job:", dest);
   }
 
   if (!masteringQueue) {

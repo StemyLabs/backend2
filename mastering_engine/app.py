@@ -24,12 +24,25 @@ from __future__ import annotations
 
 import logging
 import os
-
-from dotenv import load_dotenv
-load_dotenv()
 import time
 import urllib.request
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+_ENGINE_DIR = Path(__file__).resolve().parent
+# Load only mastering_engine/.env — do not inherit server/.env or shell PORT=8000 (Node API).
+load_dotenv(_ENGINE_DIR / ".env")
+
+DEFAULT_ENGINE_PORT = 5050
+
+
+def _dev_engine_port() -> int:
+    """Local dev port; STEMY_ENGINE_PORT avoids clashing with Node PORT."""
+    raw = os.environ.get("STEMY_ENGINE_PORT")
+    if raw:
+        return int(raw)
+    return DEFAULT_ENGINE_PORT
 
 from flask import Flask, jsonify, request, send_file, abort
 from flask_cors import CORS
@@ -37,6 +50,13 @@ from flask_cors import CORS
 from genres import GENRES, DEFAULT_GENRE, get_preset
 from dsp_chain import master_audio_file, TARGET_LUFS, TARGET_TP_DB
 from io_stream import safe_unlink, temp_path
+
+try:
+    import mutagen  # noqa: F401 — required for ID3/artwork embedding
+
+    _MUTAGEN_OK = True
+except ImportError:
+    _MUTAGEN_OK = False
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -46,6 +66,13 @@ logging.basicConfig(
 )
 log = logging.getLogger("stemy.api")
 log.info("WEB_CONCURRENCY=%s", os.environ.get("WEB_CONCURRENCY", "(not set)"))
+if not _MUTAGEN_OK:
+    log.error(
+        "mutagen is NOT installed — artwork/metadata will NOT be embedded. "
+        "Run: pip install -r requirements.txt"
+    )
+else:
+    log.info("mutagen OK — ID3 artwork embedding enabled")
 
 # ─── Flask app ────────────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -155,10 +182,16 @@ def master():
     art_bytes = None
     if "artwork" in request.files:
         art_file = request.files["artwork"]
-        if art_file and art_file.filename:
+        if art_file:
             art_bytes = art_file.read()
-            log.info("[QUICK MASTER] Artwork received directly: %s (%d bytes)",
-                     art_file.filename, len(art_bytes))
+            if art_bytes:
+                log.info(
+                    "[QUICK MASTER] Artwork received directly: %s (%d bytes)",
+                    art_file.filename or "(unnamed)",
+                    len(art_bytes),
+                )
+            else:
+                art_bytes = None
     
     # Fallback: if no direct artwork but metadata has artworkUrl, fetch it
     if art_bytes is None and metadata and metadata.get("artworkUrl"):
@@ -172,6 +205,11 @@ def master():
         except Exception as exc:
             log.warning("[QUICK MASTER] Failed to fetch artwork from URL: %s", exc)
             art_bytes = None
+
+    if art_bytes:
+        log.info("[QUICK MASTER] Artwork ready for embed: %d bytes", len(art_bytes))
+    else:
+        log.warning("[QUICK MASTER] No artwork bytes — cover will be skipped")
     
     try:
         preset = get_preset(genre)
@@ -294,8 +332,14 @@ def json_error(exc):
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5050))
+    port = _dev_engine_port()
     host = os.environ.get("HOST", "127.0.0.1")
     debug = False
-    log.info("Starting Stemy Mastering Engine on %s:%d (debug=%s)", host, port, debug)
+    log.info(
+        "Starting Stemy Mastering Engine on %s:%d (debug=%s, STEMY_ENGINE_PORT=%s)",
+        host,
+        port,
+        debug,
+        os.environ.get("STEMY_ENGINE_PORT", f"(default {DEFAULT_ENGINE_PORT})"),
+    )
     app.run(host=host, port=port, debug=debug)

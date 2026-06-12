@@ -1,11 +1,19 @@
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { uploadBuffer, uploadStream, getDownloadUrl } from "../services/storage.service.js";
-import { enqueueMasteringJob, getLocalDownloadPath } from "../services/queue.service.js";
+import { enqueueMasteringJob } from "../services/queue.service.js";
+import {
+  getMasterMp3Path,
+  getMasterMp3PathIfExists,
+  ensureWavOnDisk,
+  resolveLocalWavPath,
+} from "../services/audio-export.service.js";
+import { MASTER_TMP_DIR } from "../utils/master-temp.js";
 import https from "https";
 import http from "http";
 import fs from "fs";
 import fsp from "fs/promises";
+import path from "path";
 
 const ALLOWED_PLANS = ["BASIC", "PRO"];
 
@@ -30,6 +38,35 @@ const ALLOWED_MIME = new Set([
   "audio/aiff",
   "audio/x-aiff",
 ]);
+
+const streamFileDownload = (res, filePath, sourceName, { contentType, ext }) => {
+  const base = sourceName?.replace(/\.[^.]+$/, "") || "track";
+  const filename = `mastered-${base}.${ext}`;
+  const stat = fs.statSync(filePath);
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.setHeader("Content-Length", String(stat.size));
+  res.setHeader("Cache-Control", "no-store");
+  const stream = fs.createReadStream(filePath);
+  stream.on("error", (err) => {
+    console.error("[DOWNLOAD] Stream error:", err.message);
+    if (!res.headersSent) res.status(500).json({ message: "Failed to read file" });
+    else res.destroy();
+  });
+  stream.pipe(res);
+};
+
+const streamWavDownload = (res, filePath, sourceName) =>
+  streamFileDownload(res, filePath, sourceName, {
+    contentType: "audio/wav",
+    ext: "wav",
+  });
+
+const streamMp3Download = (res, filePath, sourceName) =>
+  streamFileDownload(res, filePath, sourceName, {
+    contentType: "audio/mpeg",
+    ext: "mp3",
+  });
 
 export const createQuickMaster = async (req, res) => {
   try {
@@ -77,9 +114,27 @@ export const createQuickMaster = async (req, res) => {
 
     // Parse metadata and handle artwork
     let parsedMetadata = metadataRaw ? JSON.parse(metadataRaw) : null;
+    let artworkCachePath = null;
 
     // Upload artwork if provided
     if (artwork) {
+      const artExt =
+        path.extname(artwork.originalname || "") ||
+        (artwork.mimetype === "image/png" ? ".png" : ".jpg");
+      artworkCachePath = path.join(
+        MASTER_TMP_DIR,
+        `pending-art-${Date.now()}${artExt}`,
+      );
+
+      if (artwork.path) {
+        await fsp.copyFile(artwork.path, artworkCachePath);
+      } else if (artwork.buffer?.length) {
+        await fsp.writeFile(artworkCachePath, artwork.buffer);
+      } else {
+        artworkCachePath = null;
+        console.warn("[QUICK MASTER] Artwork file had no readable data");
+      }
+
       const artKey = `artwork/${req.userId}/${Date.now()}-${artwork.originalname}`;
       const artType = artwork.mimetype || "image/jpeg";
       let artUrl;
@@ -146,7 +201,11 @@ export const createQuickMaster = async (req, res) => {
     console.log("[QUICK MASTER] Database record created with ID:", master.id);
 
     console.log("[QUICK MASTER] Enqueuing mastering job (async)...");
-    void enqueueMasteringJob(master.id, isVps ? (file.path || null) : null).catch((err) => {
+    void enqueueMasteringJob(
+      master.id,
+      isVps ? (file.path || null) : null,
+      artworkCachePath,
+    ).catch((err) => {
       console.error("[QUICK MASTER] enqueueMasteringJob failed:", err?.message || err);
     });
     console.log(
@@ -192,60 +251,57 @@ export const getMasterDownload = async (req, res) => {
     return res.status(409).json({ message: "Master output is not ready" });
   }
 
-  // Check local temp cache first (fastest)
-  const localPath = getLocalDownloadPath(master.id);
-  if (localPath && fs.existsSync(localPath)) {
-    const filename = `mastered-${master.sourceName?.replace(/\.[^.]+$/, "") || "track"}.wav`;
-    res.setHeader("Content-Type", "audio/wav");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.setHeader("Cache-Control", "no-store");
-    const stream = fs.createReadStream(localPath);
-    stream.pipe(res);
-    stream.on("error", () => {
-      if (!res.headersSent) res.status(500).json({ message: "Failed to read file" });
-    });
-    return;
-  }
+  const format = String(req.query.format || "wav").toLowerCase();
 
-  // Fall back to R2
-  if (!master.outputUrl) {
-    return res.status(409).json({ message: "Master output is still uploading, please try again in a moment" });
-  }
+  if (format === "mp3") {
+    try {
+      const cachedMp3 = getMasterMp3PathIfExists(master.id);
+      if (cachedMp3) {
+        return streamMp3Download(res, cachedMp3, master.sourceName);
+      }
 
-  // Handle local:// URLs — serve from disk if file exists
-  if (master.outputUrl.startsWith("local://")) {
-    const localKey = master.outputUrl.replace("local://", "");
-    const os = await import("os");
-    const pathLib = await import("path");
-    const tmpDir = pathLib.join(os.tmpdir(), "stemy-masters");
-    const diskPath = pathLib.join(tmpDir, pathLib.basename(localKey));
-    if (fs.existsSync(diskPath)) {
-      const filename = `mastered-${master.sourceName?.replace(/\.[^.]+$/, "") || "track"}.wav`;
-      res.setHeader("Content-Type", "audio/wav");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-      res.setHeader("Cache-Control", "no-store");
-      const stream = fs.createReadStream(diskPath);
-      stream.pipe(res);
-      stream.on("error", () => {
-        if (!res.headersSent) res.status(500).json({ message: "Failed to read file" });
+      const wavPath =
+        resolveLocalWavPath(master) || (await ensureWavOnDisk(master));
+      if (!wavPath) {
+        return res.status(409).json({
+          message: "Master file is no longer available. Please run a new master.",
+        });
+      }
+
+      const mp3Path = await getMasterMp3Path(master.id, wavPath);
+      return streamMp3Download(res, mp3Path, master.sourceName);
+    } catch (err) {
+      console.error("[DOWNLOAD] MP3 conversion failed:", err.message);
+      return res.status(500).json({
+        message: "MP3 conversion failed. Try downloading WAV instead.",
       });
-      return;
     }
-    return res.status(404).json({ message: "Master file not found on disk. It may have been cleaned up." });
+  }
+
+  const localPath = resolveLocalWavPath(master);
+  if (localPath) {
+    return streamWavDownload(res, localPath, master.sourceName);
+  }
+
+  // Fall back to R2 (or wait if background upload still running)
+  if (!master.outputUrl || master.outputUrl.startsWith("local://")) {
+    return res.status(409).json({
+      message: "Master file is no longer on the server. Please run a new master.",
+    });
   }
 
   const signedUrl = await getDownloadUrl(master.outputUrl);
-  
+
   const urlObj = new URL(master.outputUrl);
   const filename = urlObj.pathname.split("/").pop() || "mastered-track.wav";
-  
+
   res.setHeader("Content-Type", "audio/wav");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.setHeader("Cache-Control", "no-store");
-  
+
   const proxyUrl = new URL(signedUrl);
   const protocol = proxyUrl.protocol === "https:" ? https : http;
-  
+
   const proxyReq = protocol.request(proxyUrl, (proxyRes) => {
     if (proxyRes.statusCode !== 200) {
       res.status(proxyRes.statusCode || 500).json({ message: "Failed to fetch file from storage" });
@@ -253,11 +309,11 @@ export const getMasterDownload = async (req, res) => {
     }
     proxyRes.pipe(res);
   });
-  
+
   proxyReq.on("error", (err) => {
     console.error("[DOWNLOAD] Proxy error:", err.message);
     res.status(500).json({ message: "Failed to download file" });
   });
-  
+
   proxyReq.end();
 };

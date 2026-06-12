@@ -344,6 +344,21 @@ def _pass2_stream(
 
 # ─────────────────────────── metadata embedding ─────────────────────────────
 
+_METADATA_SKIP_KEYS = frozenset({"artworkUrl", "progress", "progressLabel"})
+
+
+def _clean_metadata(metadata: dict | None) -> dict | None:
+    """Drop internal/job fields and empty values before embedding."""
+    if not metadata:
+        return None
+    cleaned = {
+        k: v
+        for k, v in metadata.items()
+        if k not in _METADATA_SKIP_KEYS and v is not None and str(v).strip()
+    }
+    return cleaned or None
+
+
 def _embed_riff_metadata(
     wav_bytes: bytes,
     metadata: dict | None = None,
@@ -385,17 +400,6 @@ def _embed_riff_metadata(
             chunks_to_insert.append(
                 b"LIST" + struct.pack("<I", len(list_body)) + list_body
             )
-        if artwork_bytes:
-            mime_type = _guess_image_mime(artwork_bytes)
-            mime_bytes = mime_type.encode("utf-8") + b"\x00"
-            if len(mime_bytes) % 2:
-                mime_bytes += b"\x00"
-            pict_data = mime_bytes + artwork_bytes
-            if len(pict_data) % 2:
-                pict_data += b"\x00"
-            chunks_to_insert.append(
-                b"PICT" + struct.pack("<I", len(pict_data)) + pict_data
-            )
         if not chunks_to_insert:
             return wav_bytes
 
@@ -420,28 +424,120 @@ def _embed_riff_metadata(
         return wav_bytes
 
 
+def _embed_id3_metadata_file(
+    wav_path: Path,
+    metadata: dict | None = None,
+    artwork_bytes: bytes | None = None,
+) -> None:
+    """Embed ID3v2 tags (incl. APIC cover art) — widely supported by media players."""
+    meta = _clean_metadata(metadata)
+    if not meta and not artwork_bytes:
+        return
+    try:
+        from mutagen.wave import WAVE
+        from mutagen.id3 import (
+            APIC,
+            COMM,
+            TALB,
+            TCOP,
+            TCOM,
+            TCON,
+            TDRC,
+            TIT2,
+            TPE1,
+            TRCK,
+            TSRC,
+        )
+    except ImportError:
+        log.error(
+            "mutagen not installed — run: pip install mutagen  (artwork will be missing)"
+        )
+        return
+
+    frame_map = (
+        ("title", TIT2),
+        ("artist", TPE1),
+        ("album", TALB),
+        ("year", TDRC),
+        ("track", TRCK),
+        ("genre", TCON),
+        ("copyright", TCOP),
+        ("composer", TCOM),
+        ("isrc", TSRC),
+    )
+
+    try:
+        audio = WAVE(wav_path)
+        if audio.tags is None:
+            audio.add_tags()
+
+        if meta:
+            for key, frame_cls in frame_map:
+                val = meta.get(key)
+                if not val:
+                    continue
+                frame_id = frame_cls.__name__
+                audio.tags.delall(frame_id)
+                audio.tags.add(frame_cls(encoding=3, text=str(val)))
+            comment = meta.get("comment")
+            if comment:
+                audio.tags.delall("COMM")
+                audio.tags.add(COMM(encoding=3, lang="eng", desc="", text=str(comment)))
+
+        if artwork_bytes:
+            mime = _guess_image_mime(artwork_bytes)
+            audio.tags.delall("APIC")
+            audio.tags.add(
+                APIC(
+                    encoding=3,
+                    mime=mime,
+                    type=3,
+                    desc="Cover",
+                    data=artwork_bytes,
+                )
+            )
+            log.info(
+                "Embedded ID3 cover art (%d bytes, %s)",
+                len(artwork_bytes),
+                mime,
+            )
+
+        audio.save()
+        if artwork_bytes:
+            log.info("ID3 metadata saved to %s (includes cover art)", wav_path.name)
+        else:
+            log.info("ID3 metadata saved to %s", wav_path.name)
+    except Exception as exc:
+        log.error("Failed to embed ID3 metadata: %s", exc, exc_info=True)
+
+
 def _embed_riff_metadata_file(
     wav_path: Path,
     metadata: dict | None = None,
     artwork_bytes: bytes | None = None,
 ) -> None:
-    """Embed metadata; loads file only when under STEMY_METADATA_MAX_BYTES."""
-    if not metadata and not artwork_bytes:
+    """Embed RIFF INFO + ID3 tags into the mastered WAV."""
+    meta = _clean_metadata(metadata)
+    if not meta and not artwork_bytes:
         return
     max_embed = int(os.environ.get("STEMY_METADATA_MAX_BYTES", str(200 * 1024 * 1024)))
     size = wav_path.stat().st_size
     if size > max_embed:
         log.warning(
-            "Skipping RIFF metadata embed for %.1f MB output (limit %.1f MB)",
+            "Skipping metadata embed for %.1f MB output (limit %.1f MB)",
             size / 1e6,
             max_embed / 1e6,
         )
         return
-    data = wav_path.read_bytes()
-    embedded = _embed_riff_metadata(data, metadata, artwork_bytes)
-    if embedded is not data:
-        wav_path.write_bytes(embedded)
-    del data
+
+    if meta:
+        data = wav_path.read_bytes()
+        embedded = _embed_riff_metadata(data, meta, None)
+        if embedded is not data:
+            wav_path.write_bytes(embedded)
+        del data
+
+    _embed_id3_metadata_file(wav_path, meta, artwork_bytes)
 
 
 def _true_peak_db(audio: np.ndarray) -> float:

@@ -6,3 +6,4 @@ soundfile>=0.12.1
 pyloudnorm>=0.1.1
 gunicorn>=21.0.0
 python-dotenv>=1.0.0
+mutagen>=1.47.0

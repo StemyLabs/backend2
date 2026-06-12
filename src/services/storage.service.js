@@ -4,13 +4,33 @@ import {
   GetObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import fs from "fs";
+import fsp from "fs/promises";
+import path from "path";
+import { pipeline } from "stream/promises";
 import { env } from "../config/env.js";
+import { MASTER_TMP_DIR } from "../utils/master-temp.js";
 
 const useR2 =
   !!env.R2_ENDPOINT &&
   !!env.R2_ACCESS_KEY_ID &&
   !!env.R2_SECRET_ACCESS_KEY &&
   !!env.R2_BUCKET;
+
+/** On-disk fallback when R2 is not configured (local dev). */
+export const LOCAL_STORAGE_DIR = path.join(MASTER_TMP_DIR, "storage");
+
+const localStoragePath = (key) => {
+  const normalizedKey = String(key || "").replace(/^\/+/, "");
+  return path.join(LOCAL_STORAGE_DIR, normalizedKey);
+};
+
+export const readLocalStorage = async (storageUrl) => {
+  if (!storageUrl?.startsWith("local://")) return null;
+  const filePath = localStoragePath(storageUrl.replace("local://", ""));
+  if (!fs.existsSync(filePath)) return null;
+  return fsp.readFile(filePath);
+};
 
 const s3 = useR2
   ? new S3Client({
@@ -41,7 +61,10 @@ const toPublicUrl = (key) => {
 
 export const uploadBuffer = async ({ key, body, contentType }) => {
   if (!s3) {
-    return `local://${key}`;
+    const filePath = localStoragePath(key);
+    await fsp.mkdir(path.dirname(filePath), { recursive: true });
+    await fsp.writeFile(filePath, body);
+    return `local://${String(key || "").replace(/^\/+/, "")}`;
   }
 
   await s3.send(
@@ -66,7 +89,10 @@ export const uploadBuffer = async ({ key, body, contentType }) => {
 
 export const uploadStream = async ({ key, stream, contentType, contentLength }) => {
   if (!s3) {
-    return `local://${key}`;
+    const filePath = localStoragePath(key);
+    await fsp.mkdir(path.dirname(filePath), { recursive: true });
+    await pipeline(stream, fs.createWriteStream(filePath));
+    return `local://${String(key || "").replace(/^\/+/, "")}`;
   }
 
   await s3.send(
