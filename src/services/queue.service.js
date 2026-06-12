@@ -13,17 +13,38 @@ import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
 
-const createRedisConnection = () => {
+const MASTER_JOB_LOCK_MS = 660_000; // slightly above 10 min Python timeout
+const MASTER_JOB_RENEW_MS = 30_000;
+
+const createRedisConnection = (label) => {
   if (!env.REDIS_URL) return null;
-  return new Redis(env.REDIS_URL, {
+  const conn = new Redis(env.REDIS_URL, {
     maxRetriesPerRequest: null,
+    enableReadyCheck: false,
+    enableOfflineQueue: false,
+    connectTimeout: 15_000,
+    keepAlive: 30_000,
+    retryStrategy: (times) => {
+      if (times > 20) {
+        console.error(`[QUICK MASTER] Redis ${label} giving up after ${times} retries`);
+        return null;
+      }
+      return Math.min(times * 500, 5_000);
+    },
     ...(env.REDIS_URL.startsWith("rediss://") ? { tls: {} } : {}),
   });
+  conn.on("connect", () => {
+    console.log(`[QUICK MASTER] Redis ${label} connected`);
+  });
+  conn.on("reconnecting", () => {
+    console.warn(`[QUICK MASTER] Redis ${label} reconnecting...`);
+  });
+  return conn;
 };
 
 // BullMQ requires separate Redis connections for Queue and Worker.
-const queueRedis = createRedisConnection();
-const workerRedis = createRedisConnection();
+const queueRedis = createRedisConnection("queue");
+const workerRedis = createRedisConnection("worker");
 
 export const masteringQueue = queueRedis
   ? new Queue("mastering", { connection: queueRedis })
@@ -62,11 +83,9 @@ const waitForSourceFile = async (filePath, attempts = 15, delayMs = 200) => {
 };
 
 const resolveSourcePath = async (masterId, master) => {
-  let srcPath = pathCache.get(masterId);
-  if (srcPath) pathCache.delete(masterId);
-
   const onDisk = sourcePathForMaster(masterId, master.sourceName);
-  if (srcPath && fs.existsSync(srcPath)) return srcPath;
+  const cached = pathCache.get(masterId);
+  if (cached && fs.existsSync(cached)) return cached;
   if (fs.existsSync(onDisk)) return onDisk;
 
   if (master.sourceUrl?.startsWith("local://pending")) {
@@ -125,7 +144,6 @@ const buildEngineMetadata = (metadata) => {
 const loadArtworkBuffer = async (master, masterId) => {
   const cachedPath = artworkPathCache.get(masterId);
   if (cachedPath) {
-    artworkPathCache.delete(masterId);
     if (fs.existsSync(cachedPath)) {
       try {
         const buf = await fsp.readFile(cachedPath);
@@ -232,6 +250,66 @@ const buildMasterFormData = async ({
   }
 
   return formData;
+};
+
+const logQueueHealth = async (label) => {
+  if (!masteringQueue) return;
+  try {
+    const counts = await masteringQueue.getJobCounts(
+      "waiting",
+      "active",
+      "delayed",
+      "failed",
+      "paused",
+    );
+    console.log(`[QUICK MASTER] Redis queue ${label}:`, counts);
+    return counts;
+  } catch (err) {
+    console.error("[QUICK MASTER] Redis queue health check failed:", err.message);
+    return null;
+  }
+};
+
+/** Ghost "active" jobs in Redis block worker concurrency until their lock expires. */
+const recoverOrphanedActiveJobs = async () => {
+  if (!masteringQueue) return;
+  try {
+    const activeJobs = await masteringQueue.getJobs(["active"], 0, 20);
+    if (!activeJobs.length) return;
+
+    const now = Date.now();
+    for (const job of activeJobs) {
+      const startedAt = job.processedOn || job.timestamp || now;
+      const ageMs = now - startedAt;
+      if (ageMs < 120_000) continue;
+
+      console.warn(
+        "[QUICK MASTER] Recovering orphaned Redis job:",
+        job.id,
+        job.data?.masterId,
+        `(${Math.round(ageMs / 1000)}s in active)`,
+      );
+
+      try {
+        await job.moveToWait();
+        console.log("[QUICK MASTER] Re-queued orphaned job:", job.data?.masterId);
+      } catch (moveErr) {
+        console.warn("[QUICK MASTER] moveToWait failed, removing job:", moveErr.message);
+        await job.remove().catch(() => {});
+        if (job.data?.masterId) {
+          await prisma.master.update({
+            where: { id: job.data.masterId },
+            data: {
+              status: "FAILED",
+              error: "Mastering interrupted — please try again",
+            },
+          }).catch(() => {});
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[QUICK MASTER] Orphan job recovery failed:", err.message);
+  }
 };
 
 if (workerRedis) {
@@ -444,6 +522,9 @@ if (workerRedis) {
         console.log(`  USER READY     ${fmt(marks[0], marks[4])}`);
         console.log(`  (source + output R2 upload in parallel / background)`);
         console.log(`═══════════════════════════════\n`);
+
+        pathCache.delete(masterId);
+        artworkPathCache.delete(masterId);
       } catch (error) {
         console.error(`Mastering Job Failed for ${masterId}:`, error);
         throw error;
@@ -454,7 +535,15 @@ if (workerRedis) {
         }
       }
     },
-    { connection: workerRedis, concurrency: env.WORKER_CONCURRENCY, drainDelay: 200, maxStalledCount: 2, stalledInterval: 30000 },
+    {
+      connection: workerRedis,
+      concurrency: env.WORKER_CONCURRENCY,
+      drainDelay: 200,
+      lockDuration: MASTER_JOB_LOCK_MS,
+      lockRenewTime: MASTER_JOB_RENEW_MS,
+      maxStalledCount: 3,
+      stalledInterval: 30_000,
+    },
   );
 
   worker.on("active", (job) => {
@@ -470,8 +559,14 @@ if (workerRedis) {
     });
   });
 
-  worker.on("ready", () => {
+  worker.on("ready", async () => {
     console.log("[QUICK MASTER] BullMQ worker ready (Redis connected)");
+    await recoverOrphanedActiveJobs();
+    await logQueueHealth("on ready");
+  });
+
+  worker.on("stalled", (jobId) => {
+    console.warn("[QUICK MASTER] Redis job stalled (lock lost / worker busy):", jobId);
   });
 
   worker.on("error", (err) => {
@@ -535,13 +630,27 @@ export const enqueueMasteringJob = async (masterId, sourcePath, artworkPath = nu
     return;
   }
 
-  const job = await masteringQueue.add("process", { masterId }, {
-    removeOnComplete: 100,
-    removeOnFail: 50,
-    attempts: 2,
-    backoff: { type: "fixed", delay: 3000 },
-  });
-  console.log("[QUICK MASTER] Job queued:", masterId, `(job ${job.id})`);
+  try {
+    const job = await masteringQueue.add(
+      "process",
+      { masterId },
+      {
+        jobId: masterId,
+        removeOnComplete: 100,
+        removeOnFail: 50,
+        attempts: 2,
+        backoff: { type: "fixed", delay: 5000 },
+      },
+    );
+    console.log("[QUICK MASTER] Job queued:", masterId, `(job ${job.id})`);
+  } catch (err) {
+    if (String(err.message || err).includes("Job already exists")) {
+      console.warn("[QUICK MASTER] Job already in Redis queue:", masterId);
+    } else {
+      throw err;
+    }
+  }
+  logQueueHealth("after enqueue").catch(() => {});
 };
 
 export const getLocalDownloadPath = (masterId) => downloadCache.get(masterId);
