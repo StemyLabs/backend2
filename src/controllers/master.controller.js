@@ -162,8 +162,12 @@ export const createQuickMaster = async (req, res) => {
     const isVps = env.IS_VPS === "true";
 
     if (isVps) {
+      if (!file.path || !fs.existsSync(file.path)) {
+        console.error("[QUICK MASTER] VPS upload missing audio file on disk:", file.path);
+        return res.status(400).json({ message: "Audio upload failed — please try again" });
+      }
       sourceUrl = `local://pending/${req.userId}`;
-      console.log("[QUICK MASTER] VPS mode — using local source path");
+      console.log("[QUICK MASTER] VPS mode — source at", file.path);
     } else {
       const sourceKey = `masters/${req.userId}/${Date.now()}-${file.originalname}`;
       if (file.path) {

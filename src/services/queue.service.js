@@ -13,12 +13,20 @@ import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
 
-const redisConnection = env.REDIS_URL
-  ? new Redis(env.REDIS_URL, { maxRetriesPerRequest: null })
-  : null;
+const createRedisConnection = () => {
+  if (!env.REDIS_URL) return null;
+  return new Redis(env.REDIS_URL, {
+    maxRetriesPerRequest: null,
+    ...(env.REDIS_URL.startsWith("rediss://") ? { tls: {} } : {}),
+  });
+};
 
-export const masteringQueue = redisConnection
-  ? new Queue("mastering", { connection: redisConnection })
+// BullMQ requires separate Redis connections for Queue and Worker.
+const queueRedis = createRedisConnection();
+const workerRedis = createRedisConnection();
+
+export const masteringQueue = queueRedis
+  ? new Queue("mastering", { connection: queueRedis })
   : null;
 
 const pathCache = new Map();
@@ -226,12 +234,12 @@ const buildMasterFormData = async ({
   return formData;
 };
 
-if (redisConnection) {
+if (workerRedis) {
   const worker = new Worker(
     "mastering",
     async (job) => {
       const { masterId } = job.data;
-      console.log("[QUICK MASTER] Processing mastering job for master ID:", masterId);
+      console.log("[QUICK MASTER] Processing mastering job for master ID:", masterId, `(job ${job.id})`);
 
       const master = await prisma.master.findUnique({
         where: { id: masterId },
@@ -446,8 +454,12 @@ if (redisConnection) {
         }
       }
     },
-    { connection: redisConnection, concurrency: env.WORKER_CONCURRENCY, drainDelay: 200 },
+    { connection: workerRedis, concurrency: env.WORKER_CONCURRENCY, drainDelay: 200, maxStalledCount: 2, stalledInterval: 30000 },
   );
+
+  worker.on("active", (job) => {
+    console.log("[QUICK MASTER] Job active:", job.data?.masterId, `(job ${job.id})`);
+  });
 
   worker.on("failed", async (job, error) => {
     if (!job) return;
@@ -466,8 +478,12 @@ if (redisConnection) {
     console.error("[QUICK MASTER] BullMQ worker error:", err.message);
   });
 
-  redisConnection.on("error", (err) => {
-    console.error("[QUICK MASTER] Redis connection error:", err.message);
+  workerRedis.on("error", (err) => {
+    console.error("[QUICK MASTER] Redis worker connection error:", err.message);
+  });
+
+  queueRedis?.on("error", (err) => {
+    console.error("[QUICK MASTER] Redis queue connection error:", err.message);
   });
 
   console.log("[QUICK MASTER] BullMQ worker started");
@@ -486,6 +502,11 @@ export const enqueueMasteringJob = async (masterId, sourcePath, artworkPath = nu
       await fsp.unlink(sourcePath).catch(() => {});
     }
     pathCache.set(masterId, dest);
+    console.log("[QUICK MASTER] Source cached for job:", dest);
+  } else if (sourcePath) {
+    console.warn("[QUICK MASTER] Source path missing on disk:", sourcePath);
+  } else {
+    console.warn("[QUICK MASTER] No source path for job:", masterId);
   }
 
   if (artworkPath && fs.existsSync(artworkPath)) {
@@ -514,7 +535,13 @@ export const enqueueMasteringJob = async (masterId, sourcePath, artworkPath = nu
     return;
   }
 
-  await masteringQueue.add("process", { masterId });
+  const job = await masteringQueue.add("process", { masterId }, {
+    removeOnComplete: 100,
+    removeOnFail: 50,
+    attempts: 2,
+    backoff: { type: "fixed", delay: 3000 },
+  });
+  console.log("[QUICK MASTER] Job queued:", masterId, `(job ${job.id})`);
 };
 
 export const getLocalDownloadPath = (masterId) => downloadCache.get(masterId);

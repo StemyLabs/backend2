@@ -9,6 +9,7 @@ import userRoutes from "./routes/user.routes.js";
 import subscriptionRoutes from "./routes/subscription.routes.js";
 import webhookRoutes from "./routes/webhook.routes.js";
 import masterRoutes from "./routes/master.routes.js";
+import "./services/queue.service.js";
 
 import { startTrialReminderCron } from "./cron/trial-reminder.js";
 import {
