@@ -30,6 +30,55 @@ const safeUnlink = (filePath) => {
   fsp.unlink(filePath).catch(() => {});
 };
 
+const sourcePathForMaster = (masterId, sourceName) =>
+  path.join(
+    MASTER_TMP_DIR,
+    `${masterId}-source${path.extname(sourceName) || ".audio"}`,
+  );
+
+const artworkPathForMaster = (masterId) => {
+  for (const ext of [".png", ".jpg", ".jpeg", ".webp"]) {
+    const p = path.join(MASTER_TMP_DIR, `${masterId}-artwork${ext}`);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+};
+
+/** Wait briefly for enqueue to finish moving uploads onto disk (VPS race guard). */
+const waitForSourceFile = async (filePath, attempts = 15, delayMs = 200) => {
+  for (let i = 0; i < attempts; i++) {
+    if (fs.existsSync(filePath)) return filePath;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return fs.existsSync(filePath) ? filePath : null;
+};
+
+const resolveSourcePath = async (masterId, master) => {
+  let srcPath = pathCache.get(masterId);
+  if (srcPath) pathCache.delete(masterId);
+
+  const onDisk = sourcePathForMaster(masterId, master.sourceName);
+  if (srcPath && fs.existsSync(srcPath)) return srcPath;
+  if (fs.existsSync(onDisk)) return onDisk;
+
+  if (master.sourceUrl?.startsWith("local://pending")) {
+    const ready = await waitForSourceFile(onDisk);
+    if (ready) return ready;
+    throw new Error("Source file not ready on server. Please try again.");
+  }
+
+  if (!master.sourceUrl || master.sourceUrl.startsWith("local://")) {
+    throw new Error("Source file not found on server.");
+  }
+
+  const sourceDownloadUrl = await getDownloadUrl(master.sourceUrl);
+  const sourceResponse = await fetch(sourceDownloadUrl);
+  if (!sourceResponse.ok) throw new Error("Failed to download source audio");
+  const buf = Buffer.from(await sourceResponse.arrayBuffer());
+  await fsp.writeFile(onDisk, buf);
+  return onDisk;
+};
+
 const updateProgress = async (masterId, progress, label) => {
   try {
     const master = await prisma.master.findUnique({ where: { id: masterId }, select: { metadata: true } });
@@ -72,12 +121,22 @@ const loadArtworkBuffer = async (master, masterId) => {
     if (fs.existsSync(cachedPath)) {
       try {
         const buf = await fsp.readFile(cachedPath);
-        await fsp.unlink(cachedPath).catch(() => {});
         console.log("[QUICK MASTER] Artwork loaded from job cache:", buf.length, "bytes");
         return buf;
       } catch (err) {
         console.warn("[QUICK MASTER] Failed to read cached artwork:", err.message);
       }
+    }
+  }
+
+  const onDiskArt = artworkPathForMaster(masterId);
+  if (onDiskArt) {
+    try {
+      const buf = await fsp.readFile(onDiskArt);
+      console.log("[QUICK MASTER] Artwork loaded from disk:", buf.length, "bytes");
+      return buf;
+    } catch (err) {
+      console.warn("[QUICK MASTER] Failed to read artwork from disk:", err.message);
     }
   }
 
@@ -200,21 +259,7 @@ if (redisConnection) {
         });
         await updateProgress(masterId, 50, "Preparing source...");
 
-        srcPath = pathCache.get(masterId);
-        if (srcPath) pathCache.delete(masterId);
-
-        if (!srcPath || !fs.existsSync(srcPath)) {
-          const sourceDownloadUrl = await getDownloadUrl(master.sourceUrl);
-          marks.push(T("signed_url"));
-          srcPath = path.join(
-            MASTER_TMP_DIR,
-            `${masterId}-source${path.extname(master.sourceName) || ".audio"}`,
-          );
-          const sourceResponse = await fetch(sourceDownloadUrl);
-          if (!sourceResponse.ok) throw new Error("Failed to download source audio");
-          const buf = Buffer.from(await sourceResponse.arrayBuffer());
-          await fsp.writeFile(srcPath, buf);
-        }
+        srcPath = await resolveSourcePath(masterId, master);
         marks.push(T("get_src"));
         await updateProgress(masterId, 55, "Source loaded — sending to engine...");
 
@@ -406,11 +451,28 @@ if (redisConnection) {
 
   worker.on("failed", async (job, error) => {
     if (!job) return;
+    console.error("[QUICK MASTER] Job failed for", job.data?.masterId, error?.message || error);
     await prisma.master.update({
       where: { id: job.data.masterId },
       data: { status: "FAILED", error: error.message },
     });
   });
+
+  worker.on("ready", () => {
+    console.log("[QUICK MASTER] BullMQ worker ready (Redis connected)");
+  });
+
+  worker.on("error", (err) => {
+    console.error("[QUICK MASTER] BullMQ worker error:", err.message);
+  });
+
+  redisConnection.on("error", (err) => {
+    console.error("[QUICK MASTER] Redis connection error:", err.message);
+  });
+
+  console.log("[QUICK MASTER] BullMQ worker started");
+} else {
+  console.warn("[QUICK MASTER] REDIS_URL not set — mastering queue disabled");
 }
 
 export const enqueueMasteringJob = async (masterId, sourcePath, artworkPath = null) => {

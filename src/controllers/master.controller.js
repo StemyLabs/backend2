@@ -200,14 +200,12 @@ export const createQuickMaster = async (req, res) => {
     });
     console.log("[QUICK MASTER] Database record created with ID:", master.id);
 
-    console.log("[QUICK MASTER] Enqueuing mastering job (async)...");
-    void enqueueMasteringJob(
+    console.log("[QUICK MASTER] Enqueuing mastering job...");
+    await enqueueMasteringJob(
       master.id,
       isVps ? (file.path || null) : null,
       artworkCachePath,
-    ).catch((err) => {
-      console.error("[QUICK MASTER] enqueueMasteringJob failed:", err?.message || err);
-    });
+    );
     console.log(
       "[QUICK MASTER] Master %s returned QUEUED — client polls GET /masters/:id",
       master.id,
