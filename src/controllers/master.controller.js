@@ -257,11 +257,6 @@ export const getMasterDownload = async (req, res) => {
 
   if (format === "mp3") {
     try {
-      const cachedMp3 = getMasterMp3PathIfExists(master.id);
-      if (cachedMp3) {
-        return streamMp3Download(res, cachedMp3, master.sourceName);
-      }
-
       const wavPath =
         resolveLocalWavPath(master) || (await ensureWavOnDisk(master));
       if (!wavPath) {
@@ -270,7 +265,16 @@ export const getMasterDownload = async (req, res) => {
         });
       }
 
-      const mp3Path = await getMasterMp3Path(master.id, wavPath);
+      const cachedMp3 = await getMasterMp3PathIfExists(
+        master.id,
+        wavPath,
+        master.metadata,
+      );
+      if (cachedMp3) {
+        return streamMp3Download(res, cachedMp3, master.sourceName);
+      }
+
+      const mp3Path = await getMasterMp3Path(master.id, wavPath, master.metadata);
       return streamMp3Download(res, mp3Path, master.sourceName);
     } catch (err) {
       console.error("[DOWNLOAD] MP3 conversion failed:", err.message);

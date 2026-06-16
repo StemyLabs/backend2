@@ -13,7 +13,7 @@ import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
 
-const MASTER_JOB_LOCK_MS = 660_000; // slightly above 10 min Python timeout
+const MASTER_JOB_LOCK_MS = 660_000;
 const MASTER_JOB_RENEW_MS = 30_000;
 
 const createRedisConnection = (label, extra = {}) => {

@@ -25,7 +25,8 @@ const LAYOUT = (content) => `
           </tr>
           <tr>
             <td align="center" style="padding:32px 32px 0;">
-              <span style="font-family:'Syne','Unbounded',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:20px;font-weight:700;color:#f0f2f7;letter-spacing:0.1em;">STEMY</span>
+              <span style="font-family:'Syne','Unbounded',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:20px;font-weight:700;color:#f0f2f7;letter-spacing:0.1em;">STEMY</span><br>
+              <span style="font-family:'DM Mono','JetBrains Mono',monospace,Consolas,sans-serif;font-size:10px;font-weight:400;color:#6b7280;letter-spacing:0.15em;text-transform:uppercase;margin-top:6px;display:inline-block;">Professional Audio Mastering</span>
             </td>
           </tr>
           <tr>
