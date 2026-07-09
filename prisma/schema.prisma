@@ -39,6 +39,10 @@ model Subscription {
   status               SubscriptionStatus @default(TRIALING)
   trialEndsAt          DateTime?
   currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  accessEndedAt        DateTime?
+  filesPurgeAt         DateTime?
+  filesPurgedAt        DateTime?
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
 
@@ -63,7 +67,8 @@ model Master {
   duration    Float?
   error       String?
   createdAt   DateTime     @default(now())
-  completedAt DateTime?
+  completedAt   DateTime?
+  filesPurgedAt DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

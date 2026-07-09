@@ -3,6 +3,9 @@ import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { sendEmail } from "../utils/email.js";
 import { cancellationScheduledEmail, cancellationEmail, subscriptionWelcomeEmail } from "../utils/email-templates.js";
+import {
+  syncRetentionFromSubscriptionUpdate,
+} from "../services/retention.service.js";
 
 const mapStatus = (status) => {
   if (status === "active") return "ACTIVE";
@@ -84,6 +87,7 @@ export const handleStripeWebhook = async (req, res) => {
           status: mapStatus(sub.status),
           trialEndsAt: sub.trial_end ? new Date(sub.trial_end * 1000) : null,
           currentPeriodEnd: sub.current_period_end ? new Date(sub.current_period_end * 1000) : null,
+          cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end),
         };
 
         if (targetRecord?.id) {
@@ -96,6 +100,13 @@ export const handleStripeWebhook = async (req, res) => {
             data: updateData,
           });
         }
+
+        const retentionResult = await syncRetentionFromSubscriptionUpdate({
+          userId,
+          status: updateData.status,
+          stripeSub: sub,
+        });
+        console.log("[Stripe Webhook] File retention sync", retentionResult);
 
         if (sub.trial_end) {
           await prisma.user.update({

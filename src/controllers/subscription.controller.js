@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { stripe } from "../lib/stripe.js";
 import { env } from "../config/env.js";
+import { syncRetentionFromSubscriptionUpdate } from "../services/retention.service.js";
 
 const planMeta = {
   basic: { plan: "BASIC", priceId: env.STRIPE_BASIC_PRICE_ID },
@@ -211,10 +212,16 @@ export const getCurrentSubscription = async (req, res) => {
         status: mapStripeStatus(stripeSub.status),
         currentPeriodEnd: stripeSub.current_period_end ? new Date(stripeSub.current_period_end * 1000) : current.currentPeriodEnd,
         trialEndsAt: stripeSub.trial_end ? new Date(stripeSub.trial_end * 1000) : current.trialEndsAt,
+        cancelAtPeriodEnd: Boolean(stripeSub.cancel_at_period_end),
       };
       await prisma.subscription.update({
         where: { id: current.id },
         data: patchData,
+      });
+      await syncRetentionFromSubscriptionUpdate({
+        userId: req.userId,
+        status: patchData.status,
+        stripeSub,
       });
       current = {
         ...current,

@@ -8,7 +8,7 @@ import {
   ensureWavOnDisk,
   resolveLocalWavPath,
 } from "../services/audio-export.service.js";
-import { MASTER_TMP_DIR } from "../utils/master-temp.js";
+import { PURGED_URL } from "../services/retention.service.js";
 import https from "https";
 import http from "http";
 import fs from "fs";
@@ -251,6 +251,16 @@ export const getMasterDownload = async (req, res) => {
   }
   if (master.status !== "COMPLETE") {
     return res.status(409).json({ message: "Master output is not ready" });
+  }
+  if (
+    master.filesPurgedAt ||
+    master.outputUrl === PURGED_URL ||
+    master.sourceUrl === PURGED_URL
+  ) {
+    return res.status(410).json({
+      message:
+        "This file has been removed from storage after your subscription grace period ended.",
+    });
   }
 
   const format = String(req.query.format || "wav").toLowerCase();

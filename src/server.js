@@ -12,6 +12,7 @@ import masterRoutes from "./routes/master.routes.js";
 import "./services/queue.service.js";
 
 import { startTrialReminderCron } from "./cron/trial-reminder.js";
+import { startFileRetentionCron } from "./cron/file-retention.js";
 import {
   startPythonServer,
   stopPythonServer,
@@ -106,6 +107,7 @@ export const startServer = async () => {
     server = app.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on port ${PORT}`);
       startTrialReminderCron();
+      startFileRetentionCron();
     });
 
     if (env.NODE_ENV === "production") {

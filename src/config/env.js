@@ -32,6 +32,13 @@ const envSchema = z.object({
   WORKER_CONCURRENCY: z.coerce.number().min(1).default(1),
   APP_BASE_URL: z.string().url().default("http://localhost:3000"),
   IS_VPS: z.string().default("false"),
+  FILE_RETENTION_DAYS: z.coerce.number().min(0).default(30),
+  FILE_RETENTION_BATCH_SIZE: z.coerce.number().min(1).max(500).default(50),
+  FILE_RETENTION_CRON_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  FILE_RETENTION_CRON_SCHEDULE: z.string().default("0 3 * * *"),
 });
 
 export const env = envSchema.parse(process.env);

@@ -2,6 +2,7 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import fs from "fs";
@@ -108,33 +109,82 @@ export const uploadStream = async ({ key, stream, contentType, contentLength }) 
   return toPublicUrl(key) || `r2://${env.R2_BUCKET}/${key}`;
 };
 
+/** Extract the R2/S3 object key from a stored URL. Returns null for local or invalid URLs. */
+export const extractStorageKey = (storageUrl) => {
+  if (!storageUrl || storageUrl.startsWith("local://")) {
+    return null;
+  }
+
+  if (storageUrl.startsWith(`r2://${env.R2_BUCKET}/`)) {
+    return storageUrl.replace(`r2://${env.R2_BUCKET}/`, "");
+  }
+
+  if (env.R2_PUBLIC_BASE_URL && storageUrl.includes(env.R2_PUBLIC_BASE_URL)) {
+    return storageUrl.replace(`${env.R2_PUBLIC_BASE_URL.replace(/\/+$/, "")}/`, "");
+  }
+
+  if (storageUrl.includes(".r2.dev")) {
+    const url = new URL(storageUrl);
+    return url.pathname.replace(/^\//, "");
+  }
+
+  if (storageUrl.includes(`${env.R2_BUCKET}.`)) {
+    const url = new URL(storageUrl);
+    return url.pathname.replace(/^\//, "");
+  }
+
+  try {
+    const url = new URL(storageUrl);
+    return url.pathname.replace(/^\//, "") || null;
+  } catch {
+    return null;
+  }
+};
+
+export const deleteLocalStorage = async (storageUrl) => {
+  if (!storageUrl?.startsWith("local://")) return false;
+  const filePath = localStoragePath(storageUrl.replace("local://", ""));
+  if (!fs.existsSync(filePath)) return false;
+  await fsp.unlink(filePath);
+  return true;
+};
+
+export const deleteObject = async (key) => {
+  if (!key) return false;
+  if (!s3) return false;
+
+  await s3.send(
+    new DeleteObjectCommand({
+      Bucket: env.R2_BUCKET,
+      Key: key,
+    }),
+  );
+  return true;
+};
+
+export const deleteByUrl = async (storageUrl) => {
+  if (!storageUrl || storageUrl === "purged://") return false;
+
+  if (storageUrl.startsWith("local://")) {
+    return deleteLocalStorage(storageUrl);
+  }
+
+  const key = extractStorageKey(storageUrl);
+  if (!key) {
+    console.warn("[STORAGE] Skipping delete — could not extract key:", storageUrl);
+    return false;
+  }
+
+  return deleteObject(key);
+};
+
 export const getDownloadUrl = async (storageUrl, expiresIn = 900) => {
   if (storageUrl.startsWith("local://")) {
     return storageUrl;
   }
 
-  let key;
-
-  // Handle r2:// format (internal)
-  if (storageUrl.startsWith(`r2://${env.R2_BUCKET}/`)) {
-    key = storageUrl.replace(`r2://${env.R2_BUCKET}/`, "");
-  }
-  // Handle public R2 URLs (.cloudflarestorage.com)
-  else if (storageUrl.includes(env.R2_PUBLIC_BASE_URL)) {
-    key = storageUrl.replace(env.R2_PUBLIC_BASE_URL + "/", "");
-  }
-  // Handle R2.dev URLs
-  else if (storageUrl.includes(".r2.dev")) {
-    const url = new URL(storageUrl);
-    key = url.pathname.replace(/^\//, "");
-  }
-  // Handle direct bucket URLs
-  else if (storageUrl.includes(`${env.R2_BUCKET}.`)) {
-    const url = new URL(storageUrl);
-    key = url.pathname.replace(/^\//, "");
-  }
-  // Handle any other URL format
-  else {
+  const key = extractStorageKey(storageUrl);
+  if (!key) {
     console.error("[STORAGE] Cannot extract key from storage URL:", storageUrl);
     throw new Error("Invalid storage URL format");
   }
