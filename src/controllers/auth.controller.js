@@ -40,7 +40,10 @@ export const signup = async (req, res) => {
         .json({ message: "Email and password are required" });
     }
 
-    const existing = await prisma.user.findUnique({ where: { email } });
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const existing = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
     if (existing) {
       return res.status(409).json({ message: "Email is already registered" });
     }
@@ -51,7 +54,7 @@ export const signup = async (req, res) => {
 
     const user = await prisma.user.create({
       data: {
-        email,
+        email: normalizedEmail,
         password: hashed,
         displayName: displayName || firstName || null,
         firstName: firstName || null,
@@ -64,7 +67,7 @@ export const signup = async (req, res) => {
 
     try {
       await sendEmail({
-        to: email,
+        to: normalizedEmail,
         subject: "Welcome to Stemy! 🎵",
         html: welcomeEmail(firstName),
       });
@@ -74,7 +77,7 @@ export const signup = async (req, res) => {
 
     try {
       await sendEmail({
-        to: email,
+        to: normalizedEmail,
         subject: "Verify your email",
         html: verificationOtpEmail(verificationToken),
       });
@@ -98,8 +101,11 @@ export const login = async (req, res) => {
         .json({ message: "Email and password are required" });
     }
 
-    const userWithPassword = await prisma.user.findUnique({ where: { email } });
-    if (!userWithPassword) {
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const userWithPassword = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+    if (!userWithPassword || !userWithPassword.password) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
