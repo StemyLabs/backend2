@@ -25,23 +25,39 @@ const PORT = env.PORT || 8000;
 app.set("trust proxy", 1);
 
 const allowedOriginsSet = new Set([
+  // Local development
   "http://localhost:8080",
   "http://localhost:8000",
   "http://localhost:5501",
+  "http://127.0.0.1:8080",
   "http://127.0.0.1:8000",
   "http://127.0.0.1:5501",
   "http://127.0.0.1:5500",
-  "http://127.0.0.1:8080",
-  "https://stemy.vercel.app"
+
+  // Production frontend
+  "https://stemy.vercel.app",
 ]);
-try {
-  const u = new URL(env.FRONTEND_URL);
-  allowedOriginsSet.add(u.origin);
-  if (u.hostname === "localhost" && u.port) {
-    allowedOriginsSet.add(`${u.protocol}//127.0.0.1:${u.port}`);
+
+// Also allow whatever FRONTEND_URL is configured
+if (env.FRONTEND_URL) {
+  try {
+    const u = new URL(env.FRONTEND_URL);
+
+    // Add the configured origin
+    allowedOriginsSet.add(u.origin);
+
+    // If FRONTEND_URL is localhost, also allow the matching 127.0.0.1 origin
+    if (u.hostname === "localhost" && u.port) {
+      allowedOriginsSet.add(`${u.protocol}//127.0.0.1:${u.port}`);
+    }
+
+    // If FRONTEND_URL is 127.0.0.1, also allow the matching localhost origin
+    if (u.hostname === "127.0.0.1" && u.port) {
+      allowedOriginsSet.add(`${u.protocol}//localhost:${u.port}`);
+    }
+  } catch {
+    // Ignore invalid FRONTEND_URL
   }
-} catch {
-  /* ignore */
 }
 const allowedOrigins = [...allowedOriginsSet].filter(Boolean);
 
