@@ -371,17 +371,36 @@ def _embed_riff_metadata(
     try:
         info_payload = b""
         if metadata:
+            copyright_val = metadata.get("copyright")
+            if not copyright_val and metadata.get("copyrightYear"):
+                copyright_val = f"℗ {metadata.get('copyrightYear')}"
+
+            comment_parts = []
+            if metadata.get("comment"):
+                comment_parts.append(str(metadata.get("comment")))
+            if metadata.get("upc"):
+                comment_parts.append(f"UPC:{metadata.get('upc')}")
+            if metadata.get("explicit"):
+                comment_parts.append(f"Content:{metadata.get('explicit')}")
+            if metadata.get("bpm"):
+                comment_parts.append(f"BPM:{metadata.get('bpm')}")
+            if metadata.get("key"):
+                comment_parts.append(f"Key:{metadata.get('key')}")
+            if metadata.get("label"):
+                comment_parts.append(f"Label:{metadata.get('label')}")
+
             chunk_map = {
                 "INAM": metadata.get("title"),
                 "IART": metadata.get("artist"),
                 "IPRD": metadata.get("album"),
                 "ICRD": metadata.get("year"),
                 "IGNR": metadata.get("genre"),
-                "ICOP": metadata.get("copyright"),
+                "ICOP": copyright_val,
                 "ISRC": metadata.get("isrc"),
                 "ITRK": metadata.get("track"),
                 "ICMW": metadata.get("composer"),
-                "ICMT": metadata.get("comment"),
+                "ICMT": " | ".join(comment_parts) if comment_parts else None,
+                "IPUB": metadata.get("publisher") or metadata.get("label"),
             }
             for ck_id, val in chunk_map.items():
                 val_str = str(val).strip() if val else ""
@@ -439,14 +458,18 @@ def _embed_id3_metadata_file(
             APIC,
             COMM,
             TALB,
+            TBPM,
             TCOP,
             TCOM,
             TCON,
             TDRC,
             TIT2,
+            TKEY,
             TPE1,
+            TPUB,
             TRCK,
             TSRC,
+            TXXX,
         )
     except ImportError:
         log.error(
@@ -464,6 +487,9 @@ def _embed_id3_metadata_file(
         ("copyright", TCOP),
         ("composer", TCOM),
         ("isrc", TSRC),
+        ("publisher", TPUB),
+        ("bpm", TBPM),
+        ("key", TKEY),
     )
 
     try:
@@ -472,6 +498,12 @@ def _embed_id3_metadata_file(
             audio.add_tags()
 
         if meta:
+            # Normalize copyright from copyrightYear when needed
+            if not meta.get("copyright") and meta.get("copyrightYear"):
+                meta = {**meta, "copyright": f"℗ {meta.get('copyrightYear')}"}
+            if not meta.get("publisher") and meta.get("label"):
+                meta = {**meta, "publisher": meta.get("label")}
+
             for key, frame_cls in frame_map:
                 val = meta.get(key)
                 if not val:
@@ -479,10 +511,33 @@ def _embed_id3_metadata_file(
                 frame_id = frame_cls.__name__
                 audio.tags.delall(frame_id)
                 audio.tags.add(frame_cls(encoding=3, text=str(val)))
-            comment = meta.get("comment")
-            if comment:
+            comment_parts = []
+            if meta.get("comment"):
+                comment_parts.append(str(meta.get("comment")))
+            if meta.get("upc"):
+                comment_parts.append(f"UPC:{meta.get('upc')}")
+            if meta.get("explicit"):
+                comment_parts.append(f"Content:{meta.get('explicit')}")
+            if meta.get("label") and meta.get("publisher") != meta.get("label"):
+                comment_parts.append(f"Label:{meta.get('label')}")
+            if comment_parts:
                 audio.tags.delall("COMM")
-                audio.tags.add(COMM(encoding=3, lang="eng", desc="", text=str(comment)))
+                audio.tags.add(
+                    COMM(
+                        encoding=3,
+                        lang="eng",
+                        desc="",
+                        text=" | ".join(comment_parts),
+                    )
+                )
+            if meta.get("upc"):
+                # Replace existing UPC user text only; leave other TXXX frames alone
+                for frame in list(audio.tags.getall("TXXX")):
+                    if getattr(frame, "desc", "") == "UPC":
+                        audio.tags.discard(frame)
+                audio.tags.add(
+                    TXXX(encoding=3, desc="UPC", text=str(meta.get("upc")))
+                )
 
         if artwork_bytes:
             mime = _guess_image_mime(artwork_bytes)

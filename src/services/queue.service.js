@@ -547,7 +547,7 @@ const runMasteringJob = async (jobData) => {
       const apiBaseUrl = env.APP_BASE_URL.replace(/\/+$/, "");
       const frontendUrl = env.FRONTEND_URL.replace(/\/+$/, "");
       const downloadUrl = `${apiBaseUrl}/api/masters/${masterId}/download?token=${encodeURIComponent(downloadToken)}`;
-      const dashboardUrl = `${frontendUrl}/pages/profile.html`;
+      const dashboardUrl = `${frontendUrl}/dashboard`;
       await sendEmail({
         to: master.user.email,
         subject: "Your Stemy master is ready — Download Now",

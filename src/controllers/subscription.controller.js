@@ -34,11 +34,40 @@ function frontendBaseUrl() {
 
 function buildFrontendUrl(relativePath) {
   const base = frontendBaseUrl();
-  const rel = String(relativePath).replace(/^\/+/, "");
-  const basePath = base.pathname || "/";
-  const baseLooksLikePagesDir = /\/pages\/$/i.test(basePath);
-  const normalizedRel = baseLooksLikePagesDir ? rel : `pages/${rel}`;
-  return new URL(normalizedRel, base).toString();
+  // Prefer clean Vercel routes: /thank-you, /dashboard, /#pricing
+  // Also accept legacy "thank-you.html" / "pages/thank-you.html" inputs.
+  let rel = String(relativePath || "").replace(/^\/+/, "");
+  rel = rel.replace(/^pages\//i, "");
+  const qIndex = rel.search(/[?#]/);
+  const pathPart = qIndex === -1 ? rel : rel.slice(0, qIndex);
+  const suffix = qIndex === -1 ? "" : rel.slice(qIndex);
+  const file = pathPart.toLowerCase();
+  const CLEAN = {
+    "home.html": "/",
+    "studio.html": "/studio",
+    "console.html": "/console",
+    "about.html": "/about",
+    "login.html": "/login",
+    "signup.html": "/signup",
+    "dashboard.html": "/dashboard",
+    "subscription.html": "/subscription",
+    "thank-you.html": "/thank-you",
+    "verify-email.html": "/verify-email",
+    "reset-password.html": "/reset-password",
+    "privacy.html": "/privacy",
+    "terms.html": "/terms",
+    "account.html": "/dashboard",
+    "profile.html": "/dashboard",
+    "mastering.html": "/studio",
+  };
+  const cleanPath = CLEAN[file] || (file.endsWith(".html") ? `/${file.replace(/\.html$/i, "")}` : `/${pathPart}`);
+  const normalized =
+    cleanPath === "/"
+      ? suffix.startsWith("?")
+        ? `/${suffix}`
+        : suffix || "/"
+      : `${cleanPath}${suffix}`;
+  return new URL(normalized.replace(/^\//, ""), base).toString();
 }
 
 async function getLatestSubscription(userId) {

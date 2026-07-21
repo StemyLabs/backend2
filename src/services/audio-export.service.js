@@ -82,9 +82,37 @@ export const embedMp3Metadata = async (mp3Path, metadata, artworkBuffer = null) 
   set("trackNumber", meta.track);
   set("genre", meta.genre);
   set("composer", meta.composer);
-  set("copyright", meta.copyright);
+  const copyright =
+    meta.copyright ||
+    (meta.copyrightYear ? `℗ ${meta.copyrightYear}` : null);
+  set("copyright", copyright);
   if (meta.isrc) tags.ISRC = String(meta.isrc).trim();
-  if (meta.comment) set("comment", { language: "eng", text: String(meta.comment) });
+  set("publisher", meta.publisher || meta.label);
+  set("bpm", meta.bpm);
+  // node-id3 uses `initialKey` for TKEY in some versions; also set userDefined
+  if (meta.key) {
+    tags.initialKey = String(meta.key).trim();
+  }
+
+  const commentParts = [];
+  if (meta.comment) commentParts.push(String(meta.comment));
+  if (meta.upc) commentParts.push(`UPC:${meta.upc}`);
+  if (meta.explicit) commentParts.push(`Content:${meta.explicit}`);
+  if (meta.label && meta.publisher && meta.label !== meta.publisher) {
+    commentParts.push(`Label:${meta.label}`);
+  } else if (meta.label && !meta.publisher) {
+    commentParts.push(`Label:${meta.label}`);
+  }
+  if (commentParts.length) {
+    set("comment", { language: "eng", text: commentParts.join(" | ") });
+  }
+
+  if (meta.upc) {
+    tags.userDefinedText = [
+      ...(Array.isArray(tags.userDefinedText) ? tags.userDefinedText : []),
+      { description: "UPC", value: String(meta.upc).trim() },
+    ];
+  }
 
   let artBuf = artworkBuffer;
   if (!artBuf && meta.artworkUrl) {
