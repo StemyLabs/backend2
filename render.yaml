@@ -1,0 +1,28 @@
+# Optional Render Blueprint — Python mastering engine only.
+# For the Node API, create a separate Web Service (runtime: Node).
+#
+# Dashboard equivalent:
+#   Root Directory: server/Stemy-backend  (or repo root if monorepo)
+#   Runtime: Python 3
+#   Build:  pip install -r mastering_engine/requirements.txt
+#   Start:  cd mastering_engine && gunicorn -c gunicorn.conf.py app:app
+
+services:
+  - type: web
+    name: stemy-mastering-engine
+    runtime: python
+    # Standard = 2 GB RAM (recommended for long MP3/FLAC under 100 MB)
+    plan: standard
+    buildCommand: pip install -r mastering_engine/requirements.txt
+    startCommand: cd mastering_engine && gunicorn -c gunicorn.conf.py app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: STEMY_MAX_UPLOAD_BYTES
+        value: "104857600"
+      - key: STEMY_CHUNK_SECONDS
+        value: "30"
+      - key: STEMY_TEMP_DIR
+        value: "/tmp/stemy-master"
