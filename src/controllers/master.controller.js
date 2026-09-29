@@ -113,11 +113,20 @@ export const createQuickMaster = async (req, res) => {
       return res.status(400).json({ message: "Unsupported audio format" });
     }
 
-    // Parse metadata and handle artwork
-    let parsedMetadata = metadataRaw ? JSON.parse(metadataRaw) : null;
+    // Parse metadata safely
+    let parsedMetadata = null;
+    if (metadataRaw) {
+      try {
+        parsedMetadata = typeof metadataRaw === "string" ? JSON.parse(metadataRaw) : metadataRaw;
+      } catch (jsonErr) {
+        console.warn("[QUICK MASTER] Invalid metadata JSON received:", jsonErr.message);
+        parsedMetadata = {};
+      }
+    }
+
     let artworkCachePath = null;
 
-    // Upload artwork if provided
+    // Upload / cache artwork if provided
     if (artwork) {
       const artExt =
         path.extname(artwork.originalname || "") ||
@@ -136,27 +145,34 @@ export const createQuickMaster = async (req, res) => {
         console.warn("[QUICK MASTER] Artwork file had no readable data");
       }
 
-      const artKey = `artwork/${req.userId}/${Date.now()}-${artwork.originalname}`;
-      const artType = artwork.mimetype || "image/jpeg";
-      let artUrl;
-      if (artwork.path) {
-        const artStat = await fsp.stat(artwork.path);
-        artUrl = await uploadStream({
-          key: artKey,
-          stream: fs.createReadStream(artwork.path),
-          contentType: artType,
-          contentLength: artStat.size,
-        });
-        await fsp.unlink(artwork.path).catch(() => {});
-      } else {
-        artUrl = await uploadBuffer({
-          key: artKey,
-          body: artwork.buffer,
-          contentType: artType,
-        });
+      let artUrl = null;
+      try {
+        const artKey = `artwork/${req.userId}/${Date.now()}-${artwork.originalname}`;
+        const artType = artwork.mimetype || "image/jpeg";
+        if (artwork.path && fs.existsSync(artwork.path)) {
+          const artStat = await fsp.stat(artwork.path);
+          artUrl = await uploadStream({
+            key: artKey,
+            stream: fs.createReadStream(artwork.path),
+            contentType: artType,
+            contentLength: artStat.size,
+          });
+        } else if (artwork.buffer) {
+          artUrl = await uploadBuffer({
+            key: artKey,
+            body: artwork.buffer,
+            contentType: artType,
+          });
+        }
+      } catch (artErr) {
+        console.warn("[QUICK MASTER] R2 artwork upload failed (falling back to local):", artErr.message);
+        artUrl = artworkCachePath ? `local://${path.basename(artworkCachePath)}` : null;
       }
-      parsedMetadata = { ...parsedMetadata, artworkUrl: artUrl };
-      console.log("[QUICK MASTER] Artwork uploaded to:", artUrl);
+
+      if (artUrl) {
+        parsedMetadata = { ...parsedMetadata, artworkUrl: artUrl };
+        console.log("[QUICK MASTER] Artwork url set to:", artUrl);
+      }
     }
 
     let sourceUrl;
@@ -171,23 +187,27 @@ export const createQuickMaster = async (req, res) => {
       console.log("[QUICK MASTER] VPS mode — source at", file.path);
     } else {
       const sourceKey = `masters/${req.userId}/${Date.now()}-${file.originalname}`;
-      if (file.path) {
-        const srcStat = await fsp.stat(file.path);
-        sourceUrl = await uploadStream({
-          key: sourceKey,
-          stream: fs.createReadStream(file.path),
-          contentType: file.mimetype || "application/octet-stream",
-          contentLength: srcStat.size,
-        });
-        await fsp.unlink(file.path).catch(() => {});
-      } else {
-        sourceUrl = await uploadBuffer({
-          key: sourceKey,
-          body: file.buffer,
-          contentType: file.mimetype || "application/octet-stream",
-        });
+      try {
+        if (file.path && fs.existsSync(file.path)) {
+          const srcStat = await fsp.stat(file.path);
+          sourceUrl = await uploadStream({
+            key: sourceKey,
+            stream: fs.createReadStream(file.path),
+            contentType: file.mimetype || "application/octet-stream",
+            contentLength: srcStat.size,
+          });
+        } else if (file.buffer) {
+          sourceUrl = await uploadBuffer({
+            key: sourceKey,
+            body: file.buffer,
+            contentType: file.mimetype || "application/octet-stream",
+          });
+        }
+      } catch (upErr) {
+        console.warn("[QUICK MASTER] Source upload to R2 failed (falling back to local disk):", upErr.message);
+        sourceUrl = `local://pending/${req.userId}`;
       }
-      console.log("[QUICK MASTER] Source uploaded to:", sourceUrl);
+      console.log("[QUICK MASTER] Source URL set to:", sourceUrl);
     }
 
     console.log("[QUICK MASTER] Creating database record...");
@@ -208,7 +228,7 @@ export const createQuickMaster = async (req, res) => {
     console.log("[QUICK MASTER] Enqueuing mastering job...");
     await enqueueMasteringJob(
       master.id,
-      isVps ? (file.path || null) : null,
+      file.path || null,
       artworkCachePath,
     );
     console.log(
@@ -218,10 +238,10 @@ export const createQuickMaster = async (req, res) => {
 
     return res.status(201).json({ master });
   } catch (error) {
-    console.error("Create quick master error:", error);
+    console.error("Create quick master error:", error?.stack || error);
     return res
       .status(500)
-      .json({ message: "Failed to create quick master job" });
+      .json({ message: error?.message || "Failed to create quick master job" });
   }
 };
 
