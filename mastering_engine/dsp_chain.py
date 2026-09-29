@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import gc
 import io
+import json
 import logging
 import os
 import struct
+import subprocess
 import time
 import warnings
 from pathlib import Path
@@ -650,6 +652,110 @@ def _soft_clip_saturation(audio: np.ndarray, drive: float) -> np.ndarray:
     return (out * (rms_in / rms_out)).astype(np.float32)
 
 
+def _get_stemy_master_bin() -> Path | None:
+    env_bin = os.environ.get("STEMY_MASTER_BIN")
+    if env_bin and Path(env_bin).exists():
+        return Path(env_bin)
+
+    base = Path(__file__).resolve().parent.parent / "hiphop" / "build" / "tools" / "stemy_master"
+    candidates = [
+        base / "Release" / "stemy_master.exe",
+        base / "Debug" / "stemy_master.exe",
+        base / "stemy_master.exe",
+        base / "stemy_master",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
+def _get_hiphop_v2_config() -> Path | None:
+    env_cfg = os.environ.get("STEMY_HIPHOP_CONFIG")
+    if env_cfg and Path(env_cfg).exists():
+        return Path(env_cfg)
+
+    cfg = Path(__file__).resolve().parent.parent / "hiphop" / "config" / "hiphop" / "final_v2.json"
+    if cfg.exists():
+        return cfg
+    return None
+
+
+def master_hiphop_cpp(
+    input_path: Path | str,
+    output_path: Path | str,
+    *,
+    metadata: dict | None = None,
+    artwork_bytes: bytes | None = None,
+) -> dict:
+    exe = _get_stemy_master_bin()
+    cfg = _get_hiphop_v2_config()
+
+    if not exe or not cfg:
+        raise RuntimeError("STEMY Hip-Hop C++ engine or final_v2.json configuration is missing.")
+
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    report_json_path = temp_path("_report.json")
+
+    cmd = [
+        str(exe),
+        str(input_path),
+        str(output_path),
+        "--config",
+        str(cfg),
+        "--report-json",
+        str(report_json_path),
+        "--quiet",
+    ]
+
+    log.info("Executing STEMY Hip-Hop C++ engine: %s", " ".join(cmd))
+    t0 = time.perf_counter()
+    res = subprocess.run(cmd, capture_output=True, text=True)
+
+    try:
+        if res.returncode != 0:
+            log.error("STEMY Hip-Hop C++ engine error (exit code %d): %s", res.returncode, res.stderr or res.stdout)
+            raise RuntimeError(f"C++ mastering engine failed: {res.stderr or res.stdout}")
+
+        if not report_json_path.exists():
+            raise RuntimeError("STEMY Hip-Hop C++ engine completed without writing report JSON.")
+
+        with open(report_json_path, "r", encoding="utf-8") as f:
+            report = json.load(f)
+
+        out_analysis = report.get("output_analysis", {})
+        final_lufs = out_analysis.get("integrated_lufs", TARGET_LUFS)
+        final_tp = out_analysis.get("true_peak_dbtp", TARGET_TP_DB)
+        final_dr = out_analysis.get("crest_factor_db", 0.0)
+        duration = out_analysis.get("duration_seconds", 0.0)
+
+        if metadata or artwork_bytes:
+            _embed_riff_metadata_file(output_path, metadata, artwork_bytes)
+
+        elapsed = time.perf_counter() - t0
+        log.info(
+            "STEMY Hip-Hop C++ Master complete — %.1fs LUFS=%.1f dBTP=%.2f DR=%.1f",
+            elapsed,
+            final_lufs,
+            final_tp,
+            final_dr,
+        )
+
+        return {
+            "lufs": round(float(final_lufs), 1),
+            "dbtp": round(float(final_tp), 2),
+            "dr": round(float(final_dr), 1),
+            "duration": round(float(duration), 2),
+            "genre": "hiphop",
+            "target_lufs": -9.0,
+            "target_tp_db": -1.05,
+            "engine": "stemy_hiphop_cpp_v2",
+        }
+    finally:
+        safe_unlink(report_json_path)
+
+
 # ─────────────────────────── public API ─────────────────────────────────────
 
 def master_audio_file(
@@ -666,15 +772,30 @@ def master_audio_file(
     Master from disk paths; writes 24-bit PCM WAV to output_path.
     Returns analysis dict (same keys as master_audio).
     """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    ensure_temp_dir()
+
+    if genre and genre.strip().lower() in ("hiphop", "hip-hop", "hip_hop"):
+        exe = _get_stemy_master_bin()
+        cfg = _get_hiphop_v2_config()
+        if exe and cfg:
+            log.info("Using STEMY Hip-Hop C++ Engine (v2)...")
+            try:
+                return master_hiphop_cpp(
+                    input_path,
+                    output_path,
+                    metadata=metadata,
+                    artwork_bytes=artwork_bytes,
+                )
+            except Exception as exc:
+                log.warning("C++ Hip-Hop engine failed (%s), falling back to Python DSP...", exc)
+
     if not PEDALBOARD_AVAILABLE:
         raise RuntimeError(
             f"pedalboard is not installed: {_PEDALBOARD_ERROR}. "
             "Run: pip install pedalboard"
         )
-
-    input_path = Path(input_path)
-    output_path = Path(output_path)
-    ensure_temp_dir()
 
     t0 = time.perf_counter()
     size_bytes = input_path.stat().st_size

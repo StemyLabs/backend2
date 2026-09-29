@@ -1,0 +1,147 @@
+{
+  "adaptive_gain_db": 4.137252759816476,
+  "config_path": "config/hiphop/m2_tuning.json",
+  "config_version": "m2-tuning-checkpoint",
+  "decision": {
+    "eq_enabled": true,
+    "hf_eq_enabled": true,
+    "limiter_enabled": true,
+    "low_end_enabled": true,
+    "saturation_enabled": true,
+    "stereo_enabled": true,
+    "stereo_side_hpf_hz": 120.0,
+    "stereo_width": 1.06,
+    "transient_enabled": true
+  },
+  "decision_notes": [
+    "M2 tuning checkpoint (builds on frozen M1 tonal baseline)",
+    "loudness: lift capped by relative crest/limiter stress (may stay under −9)",
+    "loudness: lift 4.13725 dB toward -8.5 LUFS (band −9…−8; input -14.5622)",
+    "dynamics: input crest 14.8754 dB (ref ~10.2 dB; compressor OFF)",
+    "limiter: enabled @ -0.5 dBTP",
+    "tonal: PROVISIONAL quiet-path trim (sub shelf -2 dB @55, +1.5 @100/+1.5 @350, HS -1.5 @8k)",
+    "compressor: OFF (checkpoint)",
+    "m2 punch: boost=1dB sustain_cut=0.4dB mix=0.35",
+    "m2 sat: drive=0.75 mix=0.1 os=4",
+    "m2 hf: high shelf +0.6 dB @ 9000 Hz",
+    "m2 stereo: width=1.06 side_hpf=120 Hz (no widen below)"
+  ],
+  "input_path": "refs/stemy_premasters/New York Energy premix.wav",
+  "stages": [
+    {
+      "crest_factor_db": 14.875360842181781,
+      "delta_lufs_from_input": 0.0,
+      "integrated_lufs": -14.562207958161979,
+      "rms_dbfs": -15.512613601998257,
+      "sample_peak_dbfs": -0.6372527598164754,
+      "short_term_lufs": -13.053437880374027,
+      "stage": "1_input",
+      "stage_gain_change_db": 0.0,
+      "true_peak_dbtp": -0.6372527598164754
+    },
+    {
+      "crest_factor_db": 14.875360665054416,
+      "delta_lufs_from_input": 4.137252663759623,
+      "integrated_lufs": -10.424955294402356,
+      "rms_dbfs": -11.375360938128448,
+      "sample_peak_dbfs": 3.4999997269259646,
+      "short_term_lufs": -8.916185215218734,
+      "stage": "2_input_gain",
+      "stage_gain_change_db": 4.137252759816476,
+      "true_peak_dbtp": 3.4999997269259646
+    },
+    {
+      "crest_factor_db": 16.039888311585596,
+      "delta_lufs_from_input": 4.907250198405524,
+      "integrated_lufs": -9.654957759756455,
+      "rms_dbfs": -10.930339069642406,
+      "sample_peak_dbfs": 5.10954924194319,
+      "short_term_lufs": -8.158710745088579,
+      "stage": "3_tonal_low_end",
+      "stage_gain_change_db": 0.7699975346459009,
+      "true_peak_dbtp": 5.10954924194319
+    },
+    {
+      "crest_factor_db": 16.274592013747274,
+      "delta_lufs_from_input": 5.071020019706948,
+      "integrated_lufs": -9.491187938455031,
+      "rms_dbfs": -10.801801680115348,
+      "sample_peak_dbfs": 5.472790333631923,
+      "short_term_lufs": -8.027815226777793,
+      "stage": "4_punch",
+      "stage_gain_change_db": 0.1637698213014236,
+      "true_peak_dbtp": 5.472790333631923
+    },
+    {
+      "crest_factor_db": 15.81008843987849,
+      "delta_lufs_from_input": 5.006635980969184,
+      "integrated_lufs": -9.555571977192795,
+      "rms_dbfs": -10.835937662704744,
+      "sample_peak_dbfs": 4.974150777173744,
+      "short_term_lufs": -8.079583549975114,
+      "stage": "5_saturation",
+      "stage_gain_change_db": -0.06438403873776366,
+      "true_peak_dbtp": 4.974150777173744
+    },
+    {
+      "crest_factor_db": 15.834361864165132,
+      "delta_lufs_from_input": 5.011562876983925,
+      "integrated_lufs": -9.550645081178054,
+      "rms_dbfs": -10.833739373059753,
+      "sample_peak_dbfs": 5.00062249110538,
+      "short_term_lufs": -8.061895281977725,
+      "stage": "6_hf",
+      "stage_gain_change_db": 0.004926896014740834,
+      "true_peak_dbtp": 5.00062249110538
+    },
+    {
+      "crest_factor_db": 15.985770035695204,
+      "delta_lufs_from_input": 5.016439343713447,
+      "integrated_lufs": -9.545768614448532,
+      "rms_dbfs": -10.829272046295957,
+      "sample_peak_dbfs": 5.156497989399249,
+      "short_term_lufs": -8.045680676622624,
+      "stage": "7_stereo",
+      "stage_gain_change_db": 0.004876466729522022,
+      "true_peak_dbtp": 5.156497989399249
+    },
+    {
+      "crest_factor_db": 12.445349700754978,
+      "delta_lufs_from_input": 2.7862609716204467,
+      "integrated_lufs": -11.775946986541532,
+      "limiter_max_gr_db": 5.656498908996582,
+      "rms_dbfs": -12.945349831601325,
+      "sample_peak_dbfs": -0.5000001308463473,
+      "short_term_lufs": -9.779495795006667,
+      "stage": "8_limiter",
+      "stage_gain_change_db": -2.2301783720930004,
+      "true_peak_dbtp": -0.5000001308463473
+    },
+    {
+      "crest_factor_db": 12.445349700754978,
+      "delta_lufs_from_input": 2.7862609716204467,
+      "integrated_lufs": -11.775946986541532,
+      "rms_dbfs": -12.945349831601325,
+      "sample_peak_dbfs": -0.5000001308463473,
+      "short_term_lufs": -9.779495795006667,
+      "stage": "9_true_peak_safety",
+      "stage_gain_change_db": 0.0,
+      "true_peak_dbtp": -0.5000001308463473,
+      "true_peak_safety_applied": false,
+      "true_peak_safety_scale": 1.0
+    },
+    {
+      "crest_factor_db": 12.445349700754978,
+      "delta_lufs_from_input": 2.7862609716204467,
+      "integrated_lufs": -11.775946986541532,
+      "rms_dbfs": -12.945349831601325,
+      "sample_peak_dbfs": -0.5000001308463473,
+      "short_term_lufs": -9.779495795006667,
+      "stage": "10_final_output",
+      "stage_gain_change_db": 0.0,
+      "true_peak_dbtp": -0.5000001308463473,
+      "true_peak_safety_applied": false,
+      "true_peak_safety_scale": 1.0
+    }
+  ]
+}

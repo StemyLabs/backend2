@@ -1,0 +1,26 @@
+{
+  "genre_id": "hiphop",
+  "version": "m1-master01-baseline",
+  "comment": "PROVISIONAL targets from client-preferred STEMY_MASTER_01 (Bumpman eval). T.I. About The Money is commercial context, not a hard spectral/stereo match.",
+  "stages": {
+    "input_gain": true,
+    "eq": true,
+    "low_end": true,
+    "dynamics": true,
+    "saturation": true,
+    "stereo": true,
+    "limiter": true,
+    "output_safety": true
+  },
+  "provisional": {
+    "target_integrated_lufs": -9.0,
+    "loudness_tolerance_lufs": 0.75,
+    "max_lift_db": 12.0,
+    "max_reduction_db": 4.0,
+    "target_true_peak_dbtp": -0.5,
+    "enable_tonal_trim_on_quiet_input": true,
+    "quiet_input_lufs_threshold": -14.0,
+    "reference_crest_db": 10.2,
+    "prefer_tight_stereo": true
+  }
+}

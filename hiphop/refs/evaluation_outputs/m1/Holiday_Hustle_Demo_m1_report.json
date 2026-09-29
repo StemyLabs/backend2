@@ -1,0 +1,82 @@
+{
+  "config_path": "config/hiphop/default.json",
+  "config_version": "m1-master01-baseline",
+  "input_analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 22.00065734998786,
+    "duration_seconds": 132.07510204081632,
+    "integrated_lufs": -17.96888315005078,
+    "mid_energy": 0.007107203738494234,
+    "rms_dbfs": -21.32047207737486,
+    "sample_peak_dbfs": 0.6801852726130042,
+    "sample_rate": 44100,
+    "short_term_lufs": -15.251354863897674,
+    "side_energy": 0.000271036505722269,
+    "spectral_bands": {
+      "bass": 2145.9719594098906,
+      "high": 659.7219442227041,
+      "high_mid": 283.83234001004786,
+      "low_mid": 1056.744044731561,
+      "mid": 1123.2644190874234,
+      "sub_bass": 318.14774027489216
+    },
+    "stereo_correlation": 0.9265308757696685,
+    "stereo_width": 0.03673457311649934,
+    "true_peak_dbtp": 0.6801852726130042
+  },
+  "input_path": "refs/stemy_premasters/Holiday_Hustle_Demo.wav",
+  "output_analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 13.063890140232521,
+    "duration_seconds": 132.07510204081632,
+    "integrated_lufs": -10.299721494651589,
+    "mid_energy": 0.042160426562672604,
+    "rms_dbfs": -13.563890271078867,
+    "sample_peak_dbfs": -0.5000001308463473,
+    "sample_rate": 44100,
+    "short_term_lufs": -8.46799916477362,
+    "side_energy": 0.0018556139619961976,
+    "spectral_bands": {
+      "bass": 11503.389710329506,
+      "high": 3282.913561045859,
+      "high_mid": 1741.6520369921468,
+      "low_mid": 8101.738195976353,
+      "mid": 6885.599938452032,
+      "sub_bass": 1624.4940606192636
+    },
+    "stereo_correlation": 0.9156860298368814,
+    "stereo_width": 0.042157675699071986,
+    "true_peak_dbtp": -0.5000001308463473
+  },
+  "output_path": "refs/evaluation_outputs/m1/Holiday_Hustle_Demo_m1.wav",
+  "processing": {
+    "compressor_enabled": false,
+    "decision_notes": [
+      "PROVISIONAL baseline: STEMY_MASTER_01 pocket (Bumpman eval); T.I. is context only",
+      "stereo: keep width=1.0 (tight / MASTER_01-like; no widening)",
+      "loudness: lift 8.96888 dB toward -9 LUFS (input -17.9689)",
+      "dynamics: input crest 22.0007 dB (MASTER_01 ref ~10.2 dB; compressor still bypassed)",
+      "limiter: enabled @ -0.5 dBTP (MASTER_01-style ceiling)",
+      "tonal: PROVISIONAL quiet-path trim (sub shelf -2 dB @55, +1.5 @100/+1.5 @350, HS -1.5 @8k)",
+      "saturation: bypassed (no approved curve)",
+      "compressor: bypassed (crest densification via gain+limiter for now)"
+    ],
+    "eq_enabled": true,
+    "input_gain_db": 8.968883150050779,
+    "limiter_ceiling_dbfs": -0.5,
+    "limiter_enabled": true,
+    "low_end_enabled": true,
+    "saturation_enabled": false,
+    "stereo_width": 1.0
+  },
+  "safety": {
+    "channel_balance_db": -0.0162502803597828,
+    "channel_balance_ok": true,
+    "clipped_sample_count": 0,
+    "max_abs_sample": 0.9440608620643616,
+    "nan_inf_count": 0,
+    "true_peak_dbtp": -0.5000001308463473,
+    "true_peak_safety_applied": false,
+    "true_peak_safety_scale": 1.0
+  }
+}

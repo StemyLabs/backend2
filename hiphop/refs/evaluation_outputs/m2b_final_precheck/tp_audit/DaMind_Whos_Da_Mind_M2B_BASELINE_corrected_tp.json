@@ -1,0 +1,43 @@
+{
+  "analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 10.417531181391816,
+    "duration_seconds": 195.9183125,
+    "dynamic_range_db": 10.417531181391817,
+    "integrated_lufs": -10.310173682948472,
+    "lf_stereo_correlation": 0.9764943471163311,
+    "lf_stereo_correlation_cutoff_hz": 120.0,
+    "lf_stereo_correlation_supported": true,
+    "lra_supported": false,
+    "mid_energy": 0.0690283058998372,
+    "momentary_lufs": -7.631311823357133,
+    "rms_dbfs": -11.417531471414557,
+    "sample_peak_dbfs": -1.0000002900227403,
+    "sample_rate": 48000,
+    "short_term_lufs": -9.013379914861313,
+    "side_energy": 0.00312344139779035,
+    "side_mid_ratio": 0.04328989268833761,
+    "spectral_band_shares": {
+      "bass": 0.26074745315067366,
+      "bass_body": 0.7253522417430861,
+      "high": 0.010624781910955026,
+      "high_energy": 0.03626777715147667,
+      "high_mid": 0.02564299524052165,
+      "low_mid": 0.15290559092853476,
+      "mid": 0.08547439017690256,
+      "sub_bass": 0.46460478859241244
+    },
+    "spectral_bands": {
+      "bass": 14135.235283829663,
+      "high": 575.9741479198361,
+      "high_mid": 1390.118165017871,
+      "low_mid": 8289.080019274064,
+      "mid": 4633.60466724948,
+      "sub_bass": 25186.43201071942
+    },
+    "stereo_correlation": 0.9134774299568964,
+    "stereo_width": 0.04328989268833762,
+    "true_peak_dbtp": -0.11071425418966456
+  },
+  "input_path": "refs/evaluation_outputs/m2b_final_baseline/m2b_outputs/DaMind_Whos_Da_Mind_M2B_BASELINE.wav"
+}

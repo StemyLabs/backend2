@@ -1,0 +1,44 @@
+{
+  "analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 8.52109607737641,
+    "duration_seconds": 216.88965986394558,
+    "dynamic_range_db": 8.52109607737641,
+    "integrated_lufs": -8.499987719227695,
+    "lf_stereo_correlation": 0.9877444492430164,
+    "lf_stereo_correlation_cutoff_hz": 120.0,
+    "lf_stereo_correlation_supported": true,
+    "lra_supported": false,
+    "mid_energy": 0.07209656736858192,
+    "momentary_lufs": -6.293581305317886,
+    "rms_dbfs": -11.326001816965308,
+    "sample_peak_dbfs": -2.8049057395888974,
+    "sample_rate": 44100,
+    "short_term_lufs": -7.436428039745267,
+    "side_energy": 0.001591949966864073,
+    "side_mid_ratio": 0.021603772533747345,
+    "source_bit_depth": 24,
+    "spectral_band_shares": {
+      "bass": 0.3697636827191495,
+      "bass_body": 0.448984212418055,
+      "high": 0.018957173633254543,
+      "high_energy": 0.15613125561061567,
+      "high_mid": 0.13717408197736114,
+      "low_mid": 0.07324456162992118,
+      "mid": 0.32163997034140807,
+      "sub_bass": 0.07922052969890545
+    },
+    "spectral_bands": {
+      "bass": 20954.045653574543,
+      "high": 1074.2793312010233,
+      "high_mid": 7773.483742652977,
+      "low_mid": 4150.677743641856,
+      "mid": 18226.935033171634,
+      "sub_bass": 4489.32838348014
+    },
+    "stereo_correlation": 0.956794729988262,
+    "stereo_width": 0.02160377253374734,
+    "true_peak_dbtp": -1.5650014985360172
+  },
+  "input_path": "refs/evaluation_outputs/hiphop_final_r0/Antonio_Slim_Easy_HIPHOP_FINAL_R0_REVIEW.wav"
+}

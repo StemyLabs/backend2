@@ -1,0 +1,44 @@
+{
+  "analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 11.574428511414126,
+    "duration_seconds": 219.44052083333332,
+    "dynamic_range_db": 11.574428511414123,
+    "integrated_lufs": -10.542848525564297,
+    "lf_stereo_correlation": 0.9061966374626449,
+    "lf_stereo_correlation_cutoff_hz": 120.0,
+    "lf_stereo_correlation_supported": true,
+    "lra_supported": false,
+    "mid_energy": 0.04453368383563578,
+    "momentary_lufs": -7.870807844827081,
+    "rms_dbfs": -12.974246466691383,
+    "sample_peak_dbfs": -1.3998179552772596,
+    "sample_rate": 48000,
+    "short_term_lufs": -9.127497262436094,
+    "side_energy": 0.005883125007872302,
+    "side_mid_ratio": 0.11668975373140544,
+    "source_bit_depth": 24,
+    "spectral_band_shares": {
+      "bass": 0.23518803002226546,
+      "bass_body": 0.4826547814925364,
+      "high": 0.04064922015793066,
+      "high_energy": 0.11997801517723755,
+      "high_mid": 0.07932879501930688,
+      "low_mid": 0.1707418081565791,
+      "mid": 0.22662539517364694,
+      "sub_bass": 0.2474667514702709
+    },
+    "spectral_bands": {
+      "bass": 8217.928183023956,
+      "high": 1420.3629832784384,
+      "high_mid": 2771.9027207837694,
+      "low_mid": 5966.0515764241245,
+      "mid": 7918.733031651909,
+      "sub_bass": 8646.970643346072
+    },
+    "stereo_correlation": 0.7666235353863269,
+    "stereo_width": 0.11668975373140543,
+    "true_peak_dbtp": -1.2640914218291754
+  },
+  "input_path": "refs/evaluation_outputs/hiphop_final_r1/Bumpman_Shoot_My_Shot_HIPHOP_FINAL_R1_REVIEW.wav"
+}

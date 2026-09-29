@@ -1,0 +1,82 @@
+{
+  "config_path": "/home/pos-anthony/Desktop/Work/STEMY_DSP_ENGINE/config/hiphop/default.json",
+  "config_version": "m1-master01-baseline",
+  "input_analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 7.774809430429038,
+    "duration_seconds": 205.26666666666668,
+    "integrated_lufs": -5.590756963984024,
+    "mid_energy": 0.16274562145824897,
+    "rms_dbfs": -7.883071702668785,
+    "sample_peak_dbfs": -0.10826227223974778,
+    "sample_rate": 44100,
+    "short_term_lufs": -4.37068775220251,
+    "side_energy": 6.878477390782999e-05,
+    "spectral_bands": {
+      "bass": 91382.4617770074,
+      "high": 3783.003672479484,
+      "high_mid": 7238.683572567445,
+      "low_mid": 6344.802279575865,
+      "mid": 13472.477316837116,
+      "sub_bass": 5633.000884328973
+    },
+    "stereo_correlation": 0.9991599784773508,
+    "stereo_width": 0.00042247351140260823,
+    "true_peak_dbtp": -0.10826227223974778
+  },
+  "input_path": "/home/pos-anthony/Desktop/Work/STEMY_DSP_ENGINE/refs/stemy_premasters/Tef - Don't Make Me.wav",
+  "output_analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 7.7748097595668595,
+    "duration_seconds": 205.26666666666668,
+    "integrated_lufs": -8.999979269504408,
+    "mid_energy": 0.07423094617530283,
+    "rms_dbfs": -11.292314870495677,
+    "sample_peak_dbfs": -3.517505110928816,
+    "sample_rate": 44100,
+    "short_term_lufs": -7.782371330806951,
+    "side_energy": 3.1373863105833135e-05,
+    "spectral_bands": {
+      "bass": 41678.181545406325,
+      "high": 1725.9317397150933,
+      "high_mid": 3301.924016807761,
+      "low_mid": 2893.635079767482,
+      "mid": 6145.870043141329,
+      "sub_bass": 2568.7493811171553
+    },
+    "stereo_correlation": 0.9991599784799874,
+    "stereo_width": 0.00042247351132588493,
+    "true_peak_dbtp": -3.517505110928816
+  },
+  "output_path": "/home/pos-anthony/Desktop/Work/STEMY_DSP_ENGINE/refs/evaluation_outputs/m1/Tef_Dont_Make_Me_m1.wav",
+  "processing": {
+    "compressor_enabled": false,
+    "decision_notes": [
+      "PROVISIONAL baseline: STEMY_MASTER_01 pocket (Bumpman eval); T.I. is context only",
+      "stereo: keep width=1.0 (tight / MASTER_01-like; no widening)",
+      "loudness: reduce -3.40924 dB toward -9 LUFS (input -5.59076; do not push hotter)",
+      "dynamics: input crest 7.77481 dB (MASTER_01 ref ~10.2 dB; compressor still bypassed)",
+      "limiter: enabled @ -0.5 dBTP (MASTER_01-style ceiling)",
+      "tonal: bypassed (apply MASTER_01-direction trim only on quiet inputs)",
+      "saturation: bypassed (no approved curve)",
+      "compressor: bypassed (crest densification via gain+limiter for now)"
+    ],
+    "eq_enabled": true,
+    "input_gain_db": -3.409243036015976,
+    "limiter_ceiling_dbfs": -0.5,
+    "limiter_enabled": true,
+    "low_end_enabled": false,
+    "saturation_enabled": false,
+    "stereo_width": 1.0
+  },
+  "safety": {
+    "channel_balance_db": -0.027318526612119913,
+    "channel_balance_ok": true,
+    "clipped_sample_count": 0,
+    "max_abs_sample": 0.6669983267784119,
+    "nan_inf_count": 0,
+    "true_peak_dbtp": -3.517505110928816,
+    "true_peak_safety_applied": false,
+    "true_peak_safety_scale": 1.0
+  }
+}

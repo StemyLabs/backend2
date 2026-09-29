@@ -1,0 +1,147 @@
+{
+  "adaptive_gain_db": 5.58435126837297,
+  "config_path": "config/hiphop/m2_tuning.json",
+  "config_version": "m2-tuning-checkpoint",
+  "decision": {
+    "eq_enabled": true,
+    "hf_eq_enabled": false,
+    "limiter_enabled": true,
+    "low_end_enabled": true,
+    "saturation_enabled": true,
+    "stereo_enabled": true,
+    "stereo_side_hpf_hz": 120.0,
+    "stereo_width": 1.06,
+    "transient_enabled": true
+  },
+  "decision_notes": [
+    "M2 tuning checkpoint (builds on frozen M1 tonal baseline)",
+    "loudness: lift capped by relative crest/limiter stress (may stay under −9)",
+    "loudness: lift 5.58435 dB toward -8.5 LUFS (band −9…−8; input -18.8166)",
+    "dynamics: input crest 19.8388 dB (ref ~10.2 dB; compressor OFF)",
+    "limiter: enabled @ -0.5 dBTP",
+    "tonal: PROVISIONAL quiet-path trim (sub shelf -2 dB @55, +1.5 @100/+1.5 @350, HS -1.5 @8k)",
+    "compressor: OFF (checkpoint)",
+    "m2 punch: boost=1dB sustain_cut=0.4dB mix=0.35",
+    "m2 sat: drive=0.75 mix=0.1 os=4",
+    "m2 hf: bypassed (high/high-mid energy already elevated)",
+    "m2 stereo: width=1.06 side_hpf=120 Hz (no widen below)"
+  ],
+  "input_path": "refs/stemy_premasters/OBSESSED - LADI ROCK.wav",
+  "stages": [
+    {
+      "crest_factor_db": 19.838779187977067,
+      "delta_lufs_from_input": 0.0,
+      "integrated_lufs": -18.816579487891534,
+      "rms_dbfs": -21.923130456350037,
+      "sample_peak_dbfs": -2.0843512683729695,
+      "short_term_lufs": -16.057862531179794,
+      "stage": "1_input",
+      "stage_gain_change_db": 0.0,
+      "true_peak_dbtp": -2.0843512683729695
+    },
+    {
+      "crest_factor_db": 19.838779160944508,
+      "delta_lufs_from_input": 5.584351022383526,
+      "integrated_lufs": -13.232228465508008,
+      "rms_dbfs": -16.338779434018544,
+      "sample_peak_dbfs": 3.4999997269259646,
+      "short_term_lufs": -10.473511509861654,
+      "stage": "2_input_gain",
+      "stage_gain_change_db": 5.58435126837297,
+      "true_peak_dbtp": 3.4999997269259646
+    },
+    {
+      "crest_factor_db": 19.508743285952917,
+      "delta_lufs_from_input": 5.922493346148478,
+      "integrated_lufs": -12.894086141743056,
+      "rms_dbfs": -15.89276765395705,
+      "sample_peak_dbfs": 3.615975631995867,
+      "short_term_lufs": -10.158333259327717,
+      "stage": "3_tonal_low_end",
+      "stage_gain_change_db": 0.3381423237649521,
+      "true_peak_dbtp": 3.615975631995867
+    },
+    {
+      "crest_factor_db": 19.648016365894915,
+      "delta_lufs_from_input": 5.9841574262236445,
+      "integrated_lufs": -12.83242206166789,
+      "rms_dbfs": -15.828783507834043,
+      "sample_peak_dbfs": 3.8192328580608703,
+      "short_term_lufs": -10.11810054526291,
+      "stage": "4_punch",
+      "stage_gain_change_db": 0.06166408007516644,
+      "true_peak_dbtp": 3.8192328580608703
+    },
+    {
+      "crest_factor_db": 19.143126816631398,
+      "delta_lufs_from_input": 5.940556923798523,
+      "integrated_lufs": -12.876022564093011,
+      "rms_dbfs": -15.841598159619345,
+      "sample_peak_dbfs": 3.301528657012053,
+      "short_term_lufs": -10.194076416001332,
+      "stage": "5_saturation",
+      "stage_gain_change_db": -0.04360050242512159,
+      "true_peak_dbtp": 3.301528657012053
+    },
+    {
+      "crest_factor_db": 19.143126816631398,
+      "delta_lufs_from_input": 5.940556923798523,
+      "integrated_lufs": -12.876022564093011,
+      "rms_dbfs": -15.841598159619345,
+      "sample_peak_dbfs": 3.301528657012053,
+      "short_term_lufs": -10.194076416001332,
+      "stage": "6_hf",
+      "stage_gain_change_db": 0.0,
+      "true_peak_dbtp": 3.301528657012053
+    },
+    {
+      "crest_factor_db": 19.066765117557726,
+      "delta_lufs_from_input": 5.949630905775114,
+      "integrated_lufs": -12.86694858211642,
+      "rms_dbfs": -15.83660812482157,
+      "sample_peak_dbfs": 3.230156992736157,
+      "short_term_lufs": -10.187257751646127,
+      "stage": "7_stereo",
+      "stage_gain_change_db": 0.009073981976591483,
+      "true_peak_dbtp": 3.230156992736157
+    },
+    {
+      "crest_factor_db": 15.460139691817014,
+      "delta_lufs_from_input": 5.804981445408854,
+      "integrated_lufs": -13.01159804248268,
+      "limiter_max_gr_db": 3.730156660079956,
+      "rms_dbfs": -15.960139822663361,
+      "sample_peak_dbfs": -0.5000001308463473,
+      "short_term_lufs": -10.648435712240259,
+      "stage": "8_limiter",
+      "stage_gain_change_db": -0.14464946036626003,
+      "true_peak_dbtp": -0.5000001308463473
+    },
+    {
+      "crest_factor_db": 15.460139691817014,
+      "delta_lufs_from_input": 5.804981445408854,
+      "integrated_lufs": -13.01159804248268,
+      "rms_dbfs": -15.960139822663361,
+      "sample_peak_dbfs": -0.5000001308463473,
+      "short_term_lufs": -10.648435712240259,
+      "stage": "9_true_peak_safety",
+      "stage_gain_change_db": 0.0,
+      "true_peak_dbtp": -0.5000001308463473,
+      "true_peak_safety_applied": false,
+      "true_peak_safety_scale": 1.0
+    },
+    {
+      "crest_factor_db": 15.460139691817014,
+      "delta_lufs_from_input": 5.804981445408854,
+      "integrated_lufs": -13.01159804248268,
+      "rms_dbfs": -15.960139822663361,
+      "sample_peak_dbfs": -0.5000001308463473,
+      "short_term_lufs": -10.648435712240259,
+      "stage": "10_final_output",
+      "stage_gain_change_db": 0.0,
+      "true_peak_dbtp": -0.5000001308463473,
+      "true_peak_safety_applied": false,
+      "true_peak_safety_scale": 1.0
+    }
+  ]
+}

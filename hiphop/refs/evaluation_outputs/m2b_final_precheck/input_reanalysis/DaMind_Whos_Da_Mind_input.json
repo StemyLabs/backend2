@@ -1,0 +1,44 @@
+{
+  "analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 18.58370849950763,
+    "duration_seconds": 195.9183125,
+    "dynamic_range_db": 18.58370849950763,
+    "integrated_lufs": -20.64576833108759,
+    "lf_stereo_correlation": 0.9775605975115694,
+    "lf_stereo_correlation_cutoff_hz": 120.0,
+    "lf_stereo_correlation_supported": true,
+    "lra_supported": false,
+    "mid_energy": 0.006824206595729039,
+    "momentary_lufs": -14.9840267182911,
+    "rms_dbfs": -21.52773675713146,
+    "sample_peak_dbfs": -2.944028257623833,
+    "sample_rate": 48000,
+    "short_term_lufs": -18.701579079799746,
+    "side_energy": 0.00021018148520745178,
+    "side_mid_ratio": 0.029879142690044793,
+    "source_bit_depth": 24,
+    "spectral_band_shares": {
+      "bass": 0.3510541611568876,
+      "bass_body": 0.8251929776470716,
+      "high": 0.011348893350833038,
+      "high_energy": 0.03346248519252934,
+      "high_mid": 0.0221135918416963,
+      "low_mid": 0.0784672365963323,
+      "mid": 0.06287730056406672,
+      "sub_bass": 0.4741388164901841
+    },
+    "spectral_bands": {
+      "bass": 1882.3382290080758,
+      "high": 60.85230763483706,
+      "high_mid": 118.57218603286559,
+      "low_mid": 420.73815243537086,
+      "mid": 337.145545287184,
+      "sub_bass": 2542.3131781003467
+    },
+    "stereo_correlation": 0.9402735697145247,
+    "stereo_width": 0.029879142690044797,
+    "true_peak_dbtp": -2.9439227141677775
+  },
+  "input_path": "refs/New Audios/HIPHOP_M2B_Test_03_DaMind_Whos_Da_Mind.wav"
+}

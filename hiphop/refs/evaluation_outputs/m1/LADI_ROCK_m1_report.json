@@ -1,0 +1,82 @@
+{
+  "config_path": "/home/pos-anthony/Desktop/Work/STEMY_DSP_ENGINE/config/hiphop/default.json",
+  "config_version": "m1-master01-baseline",
+  "input_analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 19.838779187977067,
+    "duration_seconds": 159.81714285714287,
+    "integrated_lufs": -18.816579487891534,
+    "mid_energy": 0.006314107857907919,
+    "rms_dbfs": -21.923130456350037,
+    "sample_peak_dbfs": -2.0843512683729695,
+    "sample_rate": 44100,
+    "short_term_lufs": -16.057862531179794,
+    "side_energy": 0.00010813840006856419,
+    "spectral_bands": {
+      "bass": 1048.6884362943035,
+      "high": 461.18499700559596,
+      "high_mid": 367.99571966172005,
+      "low_mid": 746.0068626748955,
+      "mid": 1544.6318199326508,
+      "sub_bass": 794.836793735958
+    },
+    "stereo_correlation": 0.9664005918232951,
+    "stereo_width": 0.016838096162110787,
+    "true_peak_dbtp": -2.0843512683729695
+  },
+  "input_path": "/home/pos-anthony/Desktop/Work/STEMY_DSP_ENGINE/refs/stemy_premasters/OBSESSED - LADI ROCK.wav",
+  "output_analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 12.588027416236681,
+    "duration_seconds": 159.81714285714287,
+    "integrated_lufs": -10.249313342229712,
+    "mid_energy": 0.048263950410704824,
+    "rms_dbfs": -13.088027547083028,
+    "sample_peak_dbfs": -0.5000001308463473,
+    "sample_rate": 44100,
+    "short_term_lufs": -8.373915349054938,
+    "side_energy": 0.0008491380310976276,
+    "spectral_bands": {
+      "bass": 9201.16248238993,
+      "high": 2265.683312222691,
+      "high_mid": 2322.9228225953757,
+      "low_mid": 8179.792777754552,
+      "mid": 10941.896411122023,
+      "sub_bass": 5015.257078097943
+    },
+    "stereo_correlation": 0.9654743708679365,
+    "stereo_width": 0.01728944479033997,
+    "true_peak_dbtp": -0.5000001308463473
+  },
+  "output_path": "/home/pos-anthony/Desktop/Work/STEMY_DSP_ENGINE/refs/evaluation_outputs/m1/LADI_ROCK_m1.wav",
+  "processing": {
+    "compressor_enabled": false,
+    "decision_notes": [
+      "PROVISIONAL baseline: STEMY_MASTER_01 pocket (Bumpman eval); T.I. is context only",
+      "stereo: keep width=1.0 (tight / MASTER_01-like; no widening)",
+      "loudness: lift 9.81658 dB toward -9 LUFS (input -18.8166)",
+      "dynamics: input crest 19.8388 dB (MASTER_01 ref ~10.2 dB; compressor still bypassed)",
+      "limiter: enabled @ -0.5 dBTP (MASTER_01-style ceiling)",
+      "tonal: PROVISIONAL quiet-path trim (sub shelf -2 dB @55, +1.5 @100/+1.5 @350, HS -1.5 @8k)",
+      "saturation: bypassed (no approved curve)",
+      "compressor: bypassed (crest densification via gain+limiter for now)"
+    ],
+    "eq_enabled": true,
+    "input_gain_db": 9.816579487891534,
+    "limiter_ceiling_dbfs": -0.5,
+    "limiter_enabled": true,
+    "low_end_enabled": true,
+    "saturation_enabled": false,
+    "stereo_width": 1.0
+  },
+  "safety": {
+    "channel_balance_db": -0.09124931098011654,
+    "channel_balance_ok": true,
+    "clipped_sample_count": 0,
+    "max_abs_sample": 0.9440608620643616,
+    "nan_inf_count": 0,
+    "true_peak_dbtp": -0.5000001308463473,
+    "true_peak_safety_applied": false,
+    "true_peak_safety_scale": 1.0
+  }
+}

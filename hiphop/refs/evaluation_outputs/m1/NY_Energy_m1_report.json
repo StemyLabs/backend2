@@ -1,0 +1,82 @@
+{
+  "config_path": "/home/pos-anthony/Desktop/Work/STEMY_DSP_ENGINE/config/hiphop/default.json",
+  "config_version": "m1-master01-baseline",
+  "input_analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 14.875360842181781,
+    "duration_seconds": 173.72875283446712,
+    "integrated_lufs": -14.562207958161979,
+    "mid_energy": 0.027594492659140286,
+    "rms_dbfs": -15.512613601998257,
+    "sample_peak_dbfs": -0.6372527598164754,
+    "sample_rate": 44100,
+    "short_term_lufs": -13.053437880374027,
+    "side_energy": 0.0005075986012469165,
+    "spectral_bands": {
+      "bass": 10663.992239711022,
+      "high": 167.61087008386446,
+      "high_mid": 348.94000874966423,
+      "low_mid": 1708.7534672413985,
+      "mid": 1545.4807478843577,
+      "sub_bass": 7243.8205213306255
+    },
+    "stereo_correlation": 0.9638770837919627,
+    "stereo_width": 0.01806266290090763,
+    "true_peak_dbtp": -0.6372527598164754
+  },
+  "input_path": "/home/pos-anthony/Desktop/Work/STEMY_DSP_ENGINE/refs/stemy_premasters/New York Energy premix.wav",
+  "output_analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 11.826851722048652,
+    "duration_seconds": 173.72875283446712,
+    "integrated_lufs": -11.153140075395317,
+    "mid_energy": 0.05672579609280322,
+    "rms_dbfs": -12.326851852895002,
+    "sample_peak_dbfs": -0.5000001308463473,
+    "sample_rate": 44100,
+    "short_term_lufs": -9.091927994639462,
+    "side_energy": 0.0017956184011216107,
+    "spectral_bands": {
+      "bass": 19026.325138241977,
+      "high": 356.8865183794051,
+      "high_mid": 834.4442575341999,
+      "low_mid": 6276.631495192383,
+      "mid": 4368.440372691208,
+      "sub_bass": 13698.236849454603
+    },
+    "stereo_correlation": 0.9386540797277052,
+    "stereo_width": 0.030683099796024512,
+    "true_peak_dbtp": -0.5000001308463473
+  },
+  "output_path": "/home/pos-anthony/Desktop/Work/STEMY_DSP_ENGINE/refs/evaluation_outputs/m1/NY_Energy_m1.wav",
+  "processing": {
+    "compressor_enabled": false,
+    "decision_notes": [
+      "PROVISIONAL baseline: STEMY_MASTER_01 pocket (Bumpman eval); T.I. is context only",
+      "stereo: keep width=1.0 (tight / MASTER_01-like; no widening)",
+      "loudness: lift 5.56221 dB toward -9 LUFS (input -14.5622)",
+      "dynamics: input crest 14.8754 dB (MASTER_01 ref ~10.2 dB; compressor still bypassed)",
+      "limiter: enabled @ -0.5 dBTP (MASTER_01-style ceiling)",
+      "tonal: PROVISIONAL quiet-path trim (sub shelf -2 dB @55, +1.5 @100/+1.5 @350, HS -1.5 @8k)",
+      "saturation: bypassed (no approved curve)",
+      "compressor: bypassed (crest densification via gain+limiter for now)"
+    ],
+    "eq_enabled": true,
+    "input_gain_db": 5.562207958161979,
+    "limiter_ceiling_dbfs": -0.5,
+    "limiter_enabled": true,
+    "low_end_enabled": true,
+    "saturation_enabled": false,
+    "stereo_width": 1.0
+  },
+  "safety": {
+    "channel_balance_db": 0.05717890695562759,
+    "channel_balance_ok": true,
+    "clipped_sample_count": 0,
+    "max_abs_sample": 0.9440608620643616,
+    "nan_inf_count": 0,
+    "true_peak_dbtp": -0.5000001308463473,
+    "true_peak_safety_applied": false,
+    "true_peak_safety_scale": 1.0
+  }
+}

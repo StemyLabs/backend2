@@ -1,0 +1,49 @@
+{
+  "config": "config/hiphop/m2b_frozen.json",
+  "version": "m2b-frozen",
+  "tests_passed": 49,
+  "tracks": [
+    {
+      "tag": "Bumpman_Shoot_My_Shot",
+      "path": "QUIET / OPEN",
+      "in_lufs": -21.6435980169969,
+      "out_lufs": -10.03211189550747,
+      "gain": 12.75,
+      "punch": true,
+      "sat": true,
+      "low_weight": false,
+      "hf": false,
+      "stereo": false,
+      "stereo_width": 1.0,
+      "limiter_max_gr": 8.449336051940918
+    },
+    {
+      "tag": "Antonio_Slim_Easy",
+      "path": "HOT / ALREADY-DENSE",
+      "in_lufs": -5.802043459827762,
+      "out_lufs": -8.488301694762024,
+      "gain": -2.697956540172238,
+      "punch": false,
+      "sat": false,
+      "low_weight": false,
+      "hf": false,
+      "stereo": true,
+      "stereo_width": 1.06,
+      "limiter_max_gr": 0.0
+    },
+    {
+      "tag": "DaMind_Whos_Da_Mind",
+      "path": "QUIET / OPEN",
+      "in_lufs": -20.64576833108759,
+      "out_lufs": -10.310173682948472,
+      "gain": 12.395768331087591,
+      "punch": true,
+      "sat": true,
+      "low_weight": false,
+      "hf": true,
+      "stereo": true,
+      "stereo_width": 1.06,
+      "limiter_max_gr": 10.876853942871094
+    }
+  ]
+}

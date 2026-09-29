@@ -1,0 +1,42 @@
+{
+  "analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 19.254667101431547,
+    "duration_seconds": 219.44052083333332,
+    "dynamic_range_db": 19.254667101431544,
+    "integrated_lufs": -21.6435980169969,
+    "lf_stereo_correlation_supported": false,
+    "lra_supported": false,
+    "mid_energy": 0.0034644490703995543,
+    "momentary_lufs": -17.427390419855374,
+    "rms_dbfs": -24.25252214061358,
+    "sample_peak_dbfs": -4.997855039182034,
+    "sample_rate": 48000,
+    "short_term_lufs": -19.520250578168415,
+    "side_energy": 0.0002917429516458756,
+    "side_mid_ratio": 0.07766987149049087,
+    "source_bit_depth": 24,
+    "spectral_band_shares": {
+      "bass": 0.240402647223229,
+      "bass_body": 0.540669328635387,
+      "high": 0.04564682414866338,
+      "high_energy": 0.13268931536201659,
+      "high_mid": 0.08704249121335318,
+      "low_mid": 0.108786818513046,
+      "mid": 0.21785453748955053,
+      "sub_bass": 0.3002666814121579
+    },
+    "spectral_bands": {
+      "bass": 653.685037552569,
+      "high": 124.11945667997358,
+      "high_mid": 236.6794825043512,
+      "low_mid": 295.80504360624917,
+      "mid": 592.3738909065314,
+      "sub_bass": 816.4628766855199
+    },
+    "stereo_correlation": 0.8446713101200637,
+    "stereo_width": 0.07766987149049087,
+    "true_peak_dbtp": -4.997855039182034
+  },
+  "input_path": "refs/New Audios/HIPHOP_M2B_Test_01_Bumpman_Shoot_My_Shot.wav"
+}

@@ -1,0 +1,43 @@
+{
+  "analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 9.937881358887541,
+    "duration_seconds": 216.88965986394558,
+    "dynamic_range_db": 9.937881358887541,
+    "integrated_lufs": -8.488301694762024,
+    "lf_stereo_correlation": 0.9903805984951924,
+    "lf_stereo_correlation_cutoff_hz": 120.0,
+    "lf_stereo_correlation_supported": true,
+    "lra_supported": false,
+    "mid_energy": 0.07209656736732453,
+    "momentary_lufs": -6.290426063576793,
+    "rms_dbfs": -11.319340928326657,
+    "sample_peak_dbfs": -1.3814595694391159,
+    "sample_rate": 44100,
+    "short_term_lufs": -7.427030954135083,
+    "side_energy": 0.0017050546983208403,
+    "side_mid_ratio": 0.023103214409084683,
+    "spectral_band_shares": {
+      "bass": 0.3697636827096194,
+      "bass_body": 0.4489842121682078,
+      "high": 0.018957173671740206,
+      "high_energy": 0.15613125565105127,
+      "high_mid": 0.13717408197931108,
+      "low_mid": 0.07324456166611448,
+      "mid": 0.3216399705146265,
+      "sub_bass": 0.07922052945858835
+    },
+    "spectral_bands": {
+      "bass": 20954.045656342376,
+      "high": 1074.2793335515478,
+      "high_mid": 7773.483743990631,
+      "low_mid": 4150.6777463481285,
+      "mid": 18226.935045865084,
+      "sub_bass": 4489.328370570373
+    },
+    "stereo_correlation": 0.9537935142589654,
+    "stereo_width": 0.02310321440908468,
+    "true_peak_dbtp": -1.306555792161372
+  },
+  "input_path": "refs/evaluation_outputs/m2b_final_baseline/m2b_outputs/Antonio_Slim_Easy_M2B_BASELINE.wav"
+}

@@ -1,0 +1,43 @@
+{
+  "analysis": {
+    "channel_count": 2,
+    "crest_factor_db": 11.48806009288311,
+    "duration_seconds": 219.44052083333332,
+    "dynamic_range_db": 11.48806009288311,
+    "integrated_lufs": -10.03211189550747,
+    "lf_stereo_correlation": 0.9209625429287879,
+    "lf_stereo_correlation_cutoff_hz": 120.0,
+    "lf_stereo_correlation_supported": true,
+    "lra_supported": false,
+    "mid_energy": 0.05046798204506876,
+    "momentary_lufs": -7.478165913351077,
+    "rms_dbfs": -12.48806038290585,
+    "sample_peak_dbfs": -1.0000002900227403,
+    "sample_rate": 48000,
+    "short_term_lufs": -8.319315698753325,
+    "side_energy": 0.005920961969250941,
+    "side_mid_ratio": 0.10500217857861183,
+    "spectral_band_shares": {
+      "bass": 0.24006610344163443,
+      "bass_body": 0.49525731811238005,
+      "high": 0.03681765508451161,
+      "high_energy": 0.11648130415345732,
+      "high_mid": 0.07966364906894571,
+      "low_mid": 0.15902927403925357,
+      "mid": 0.229232103694909,
+      "sub_bass": 0.2551912146707456
+    },
+    "spectral_bands": {
+      "bass": 9506.504232315332,
+      "high": 1457.9617399835479,
+      "high_mid": 3154.6428511917693,
+      "low_mid": 6297.48408893451,
+      "mid": 9077.482962887396,
+      "sub_bass": 10105.451488310362
+    },
+    "stereo_correlation": 0.7900005985510203,
+    "stereo_width": 0.10500217857861183,
+    "true_peak_dbtp": -0.3303876029090187
+  },
+  "input_path": "refs/evaluation_outputs/m2b_final_baseline/m2b_outputs/Bumpman_Shoot_My_Shot_M2B_BASELINE.wav"
+}
