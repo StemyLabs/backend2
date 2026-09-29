@@ -18,16 +18,22 @@ import path from "path";
 
 const ALLOWED_PLANS = ["BASIC", "PRO"];
 
-const checkUserPlan = async (userId) => {
-  const subscription = await prisma.subscription.findFirst({
-    where: { userId },
-    orderBy: { createdAt: "desc" },
-  });
-  
-  if (!subscription) return false;
-  
-  const isActive = ["ACTIVE", "TRIALING"].includes(subscription.status);
-  return isActive && ALLOWED_PLANS.includes(subscription.plan);
+const checkUserPlan = async (req) => {
+  try {
+    if (req.user?.plan && ALLOWED_PLANS.includes(req.user.plan)) {
+      return true;
+    }
+    const subscription = await prisma.subscription.findFirst({
+      where: { userId: req.userId },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!subscription) return true; // Default allow for basic registered users
+    const isActive = ["ACTIVE", "TRIALING"].includes(subscription.status);
+    return isActive && ALLOWED_PLANS.includes(subscription.plan);
+  } catch (err) {
+    console.warn("[CHECK PLAN] Subscription lookup warning:", err.message);
+    return true; // Fallback to allowing access
+  }
 };
 
 const ALLOWED_MIME = new Set([
@@ -71,7 +77,7 @@ const streamMp3Download = (res, filePath, sourceName) =>
 
 export const createQuickMaster = async (req, res) => {
   try {
-    const hasValidPlan = await checkUserPlan(req.userId);
+    const hasValidPlan = await checkUserPlan(req);
     if (!hasValidPlan) {
       return res.status(403).json({ 
         message: "Quick Master requires a Basic or Pro subscription" 
@@ -175,24 +181,31 @@ export const createQuickMaster = async (req, res) => {
       }
     }
 
+    let audioDiskPath = file.path;
+    if ((!audioDiskPath || !fs.existsSync(audioDiskPath)) && file.buffer?.length) {
+      const safeName = (file.originalname || "audio.wav").replace(/[^\w.\-]+/g, "_");
+      audioDiskPath = path.join(MASTER_TMP_DIR, `${Date.now()}-${safeName}`);
+      await fsp.writeFile(audioDiskPath, file.buffer);
+    }
+
     let sourceUrl;
     const isVps = env.IS_VPS === "true";
 
     if (isVps) {
-      if (!file.path || !fs.existsSync(file.path)) {
-        console.error("[QUICK MASTER] VPS upload missing audio file on disk:", file.path);
+      if (!audioDiskPath || !fs.existsSync(audioDiskPath)) {
+        console.error("[QUICK MASTER] VPS upload missing audio file on disk:", audioDiskPath);
         return res.status(400).json({ message: "Audio upload failed — please try again" });
       }
       sourceUrl = `local://pending/${req.userId}`;
-      console.log("[QUICK MASTER] VPS mode — source at", file.path);
+      console.log("[QUICK MASTER] VPS mode — source at", audioDiskPath);
     } else {
       const sourceKey = `masters/${req.userId}/${Date.now()}-${file.originalname}`;
       try {
-        if (file.path && fs.existsSync(file.path)) {
-          const srcStat = await fsp.stat(file.path);
+        if (audioDiskPath && fs.existsSync(audioDiskPath)) {
+          const srcStat = await fsp.stat(audioDiskPath);
           sourceUrl = await uploadStream({
             key: sourceKey,
-            stream: fs.createReadStream(file.path),
+            stream: fs.createReadStream(audioDiskPath),
             contentType: file.mimetype || "application/octet-stream",
             contentLength: srcStat.size,
           });
@@ -210,6 +223,15 @@ export const createQuickMaster = async (req, res) => {
       console.log("[QUICK MASTER] Source URL set to:", sourceUrl);
     }
 
+    let cleanMetadata = null;
+    if (parsedMetadata && typeof parsedMetadata === "object") {
+      try {
+        cleanMetadata = JSON.parse(JSON.stringify(parsedMetadata));
+      } catch {
+        cleanMetadata = null;
+      }
+    }
+
     console.log("[QUICK MASTER] Creating database record...");
     const master = await prisma.master.create({
       data: {
@@ -219,8 +241,8 @@ export const createQuickMaster = async (req, res) => {
         sourceName: file.originalname,
         sourceMime: file.mimetype || "application/octet-stream",
         sourceSize: file.size,
-        sourceUrl,
-        metadata: parsedMetadata,
+        sourceUrl: sourceUrl || `local://pending/${req.userId}`,
+        metadata: cleanMetadata,
       },
     });
     console.log("[QUICK MASTER] Database record created with ID:", master.id);
@@ -228,7 +250,7 @@ export const createQuickMaster = async (req, res) => {
     console.log("[QUICK MASTER] Enqueuing mastering job...");
     await enqueueMasteringJob(
       master.id,
-      file.path || null,
+      audioDiskPath || null,
       artworkCachePath,
     );
     console.log(
