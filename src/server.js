@@ -108,10 +108,10 @@ app.use("/api/users", userRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
 
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({
-    message: "Something went wrong!",
-    error: env.NODE_ENV === "development" ? err.message : undefined,
+  console.error("[EXPRESS UNHANDLED ERROR]", err.stack || err);
+  res.status(err.status || 500).json({
+    message: err.message || "Something went wrong!",
+    error: err.message || "Internal Server Error",
   });
 });
 

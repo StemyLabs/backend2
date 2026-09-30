@@ -39,11 +39,21 @@ const checkUserPlan = async (req) => {
 const ALLOWED_MIME = new Set([
   "audio/wav",
   "audio/x-wav",
+  "audio/wave",
+  "audio/vnd.wave",
   "audio/mpeg",
+  "audio/mp3",
+  "audio/x-mp3",
   "audio/flac",
   "audio/x-flac",
   "audio/aiff",
   "audio/x-aiff",
+  "audio/mp4",
+  "audio/x-m4a",
+  "audio/aac",
+  "audio/ogg",
+  "audio/webm",
+  "application/octet-stream",
 ]);
 
 const streamFileDownload = (res, filePath, sourceName, { contentType, ext }) => {
