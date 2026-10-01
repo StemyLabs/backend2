@@ -9,7 +9,7 @@ import {
   resolveLocalWavPath,
 } from "../services/audio-export.service.js";
 import { PURGED_URL } from "../services/retention.service.js";
-import { MASTER_TMP_DIR } from "../utils/master-temp.js";
+import { MASTER_TMP_DIR, ensureMasterTmpDir } from "../utils/master-temp.js";
 import https from "https";
 import http from "http";
 import fs from "fs";
@@ -87,6 +87,7 @@ const streamMp3Download = (res, filePath, sourceName) =>
 
 export const createQuickMaster = async (req, res) => {
   try {
+    ensureMasterTmpDir();
     const hasValidPlan = await checkUserPlan(req);
     if (!hasValidPlan) {
       return res.status(403).json({ 
