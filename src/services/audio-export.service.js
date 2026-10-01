@@ -178,20 +178,41 @@ export const ensureWavOnDisk = async (master) => {
 
 const runFfmpeg = (args) =>
   new Promise((resolve, reject) => {
-    if (!ffmpegPath) {
-      reject(new Error("FFmpeg binary not available"));
-      return;
-    }
-    const proc = spawn(ffmpegPath, args, { windowsHide: true });
-    let stderr = "";
-    proc.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    proc.on("error", reject);
-    proc.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(stderr.trim() || `FFmpeg exited with code ${code}`));
-    });
+    const candidates = [
+      process.env.FFMPEG_PATH,
+      ffmpegPath,
+      "ffmpeg",
+    ].filter(Boolean);
+
+    let lastError = null;
+
+    const tryCandidate = (index) => {
+      if (index >= candidates.length) {
+        reject(lastError || new Error("FFmpeg binary not available"));
+        return;
+      }
+      const bin = candidates[index];
+      try {
+        const proc = spawn(bin, args, { windowsHide: true });
+        let stderr = "";
+        proc.stderr.on("data", (chunk) => {
+          stderr += chunk.toString();
+        });
+        proc.on("error", (err) => {
+          lastError = err;
+          tryCandidate(index + 1);
+        });
+        proc.on("close", (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(stderr.trim() || `FFmpeg exited with code ${code}`));
+        });
+      } catch (err) {
+        lastError = err;
+        tryCandidate(index + 1);
+      }
+    };
+
+    tryCandidate(0);
   });
 
 const isMp3CacheValid = async (masterId, wavPath, metaHash) => {
