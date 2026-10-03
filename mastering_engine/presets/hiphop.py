@@ -20,9 +20,9 @@ HIPHOP = {
     },
     "width": 1.45,
     "limiter": {
-        "threshold_db": -1.0,
+        "threshold_db": -1.40,
         "release_ms": 60.0,
     },
-    "target_lufs": -14.0,
-    "target_tp_db": -1.0,
+    "target_lufs": -9.0,
+    "target_tp_db": -1.05,
 }

@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 import pyloudnorm as pyln
+import scipy.signal
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pedalboard")
 
@@ -269,6 +270,30 @@ def _pass1_stream(
         safe_unlink(normalized_path)
 
 
+def _measure_file_true_peak(wav_path: Path, sr: int = TARGET_SR) -> float:
+    """Measure true peak (inter-sample peak) with 4x polyphase resampling."""
+    try:
+        peak = 0.0
+        with sf.SoundFile(str(wav_path)) as f:
+            block = sr * 10
+            while f.tell() < f.frames:
+                data = f.read(block, dtype="float32", always_2d=True)
+                if data is None or len(data) == 0:
+                    break
+                os_data = scipy.signal.resample_poly(data, 4, 1, axis=0)
+                peak = max(peak, float(np.max(np.abs(os_data))))
+        return _lin_to_db(peak) if peak > 1e-6 else -120.0
+    except Exception as exc:
+        log.warning("True peak measurement failed: %s", exc)
+        return -1.0
+
+
+def _scale_wav_pcm24_in_place(wav_path: Path, scale: float) -> None:
+    data, sr = sf.read(str(wav_path), dtype="float32", always_2d=True)
+    data = data * scale
+    sf.write(str(wav_path), data, sr, format="WAV", subtype="PCM_24")
+
+
 def _pass2_stream(
     pre_lufs_path: Path,
     output_path: Path,
@@ -332,7 +357,21 @@ def _pass2_stream(
             pcm_writer.write(chunk)
 
     duration = sample_count / TARGET_SR if TARGET_SR else 0.0
-    final_tp = _lin_to_db(peak_max) if peak_max > 1e-6 else -120.0
+
+    # True Peak (ITU-R BS.1770 4x oversampling) safety verification
+    actual_tp = _measure_file_true_peak(output_path, TARGET_SR)
+    if actual_tp > target_tp_db:
+        safety_scale = _db_to_lin(target_tp_db - 0.05) / _db_to_lin(actual_tp)
+        log.info(
+            "Python DSP True-Peak safety applied: %.2f dBTP exceeds target %.2f dBTP -> scaled by %.4f",
+            actual_tp,
+            target_tp_db,
+            safety_scale,
+        )
+        _scale_wav_pcm24_in_place(output_path, safety_scale)
+        actual_tp = target_tp_db - 0.05
+
+    final_tp = actual_tp
     rms = (rms_sum / max(sample_count, 1)) ** 0.5
     rms_db = 20 * np.log10(rms) if rms > 1e-6 else -120.0
     final_dr = max(0.0, final_tp - rms_db)
@@ -670,6 +709,114 @@ def _get_stemy_master_bin() -> Path | None:
     return None
 
 
+def _get_stemy_export_bin() -> Path | None:
+    env_bin = os.environ.get("STEMY_EXPORT_BIN")
+    if env_bin and Path(env_bin).exists():
+        return Path(env_bin)
+
+    base = Path(__file__).resolve().parent.parent / "hiphop" / "build" / "tools" / "stemy_export_review"
+    candidates = [
+        base / "Release" / "stemy_export_review.exe",
+        base / "Debug" / "stemy_export_review.exe",
+        base / "stemy_export_review.exe",
+        base / "stemy_export_review",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
+def _export_pcm24_soundfile(src_path: Path, dst_path: Path) -> None:
+    data, sr = sf.read(str(src_path), dtype="float32", always_2d=True)
+    sf.write(str(dst_path), data, sr, format="WAV", subtype="PCM_24")
+
+
+def _ensure_cpp_compliant_input(input_path: Path) -> tuple[Path, bool]:
+    """
+    stemy_master.exe requires a stereo RIFF WAV at 44.1k, 48k, 88.2k, or 96k.
+    If the uploaded file is MP3, FLAC, AIFF, mono, or non-compliant sample rate,
+    decode and render it to a temporary compliant stereo float WAV.
+    Returns (path_to_use, is_temporary).
+    """
+    input_path = Path(input_path)
+    is_compliant = False
+    try:
+        with sf.SoundFile(str(input_path)) as f:
+            if (
+                f.format == "WAV"
+                and f.channels == 2
+                and f.samplerate in (44100, 48000, 88200, 96000)
+            ):
+                is_compliant = True
+    except Exception:
+        is_compliant = False
+
+    if is_compliant:
+        return input_path, False
+
+    log.info("Pre-conditioning input audio (%s) to compliant stereo WAV for C++ engine...", input_path.suffix)
+    out_wav = temp_path("_cpp_preconditioned.wav")
+
+    # Try pedalboard.io.AudioFile first (handles mp3, wav, flac, ogg, etc.)
+    try:
+        from pedalboard.io import AudioFile
+        with AudioFile(str(input_path)) as af:
+            sr = int(af.samplerate)
+            if sr not in (44100, 48000, 88200, 96000):
+                sr = 44100
+                resampled = af.resampled_to(sr)
+            else:
+                resampled = af
+
+            with sf.SoundFile(
+                str(out_wav),
+                mode="w",
+                samplerate=sr,
+                channels=2,
+                format="WAV",
+                subtype="FLOAT",
+            ) as writer:
+                block_size = sr * 30
+                while resampled.tell() < resampled.frames:
+                    chunk = resampled.read(block_size)
+                    if chunk is None or chunk.size == 0:
+                        break
+                    if chunk.ndim == 1:
+                        stereo = np.column_stack([chunk, chunk])
+                    elif chunk.shape[0] == 1:
+                        stereo = np.column_stack([chunk[0], chunk[0]])
+                    elif chunk.shape[0] >= 2:
+                        stereo = chunk[:2].T
+                    else:
+                        stereo = chunk.T
+                    writer.write(stereo.astype(np.float32))
+        return out_wav, True
+    except Exception as exc:
+        log.warning("AudioFile pre-conditioning failed (%s), attempting ffmpeg fallback...", exc)
+        safe_unlink(out_wav)
+
+    # Fallback to ffmpeg
+    try:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i", str(input_path),
+            "-ac", "2",
+            "-ar", "44100",
+            "-c:a", "pcm_f32le",
+            str(out_wav)
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode == 0 and out_wav.exists() and out_wav.stat().st_size > 44:
+            return out_wav, True
+    except Exception as exc2:
+        log.error("ffmpeg pre-conditioning failed: %s", exc2)
+        safe_unlink(out_wav)
+
+    return input_path, False
+
+
 def _get_hiphop_v2_config() -> Path | None:
     env_cfg = os.environ.get("STEMY_HIPHOP_CONFIG")
     if env_cfg and Path(env_cfg).exists():
@@ -690,18 +837,22 @@ def master_hiphop_cpp(
 ) -> dict:
     exe = _get_stemy_master_bin()
     cfg = _get_hiphop_v2_config()
+    exp_exe = _get_stemy_export_bin()
 
     if not exe or not cfg:
         raise RuntimeError("STEMY Hip-Hop C++ engine or final_v2.json configuration is missing.")
 
     input_path = Path(input_path)
     output_path = Path(output_path)
+    preconditioned_path, is_tmp_input = _ensure_cpp_compliant_input(input_path)
+
+    float_output_path = temp_path("_cpp_float.wav")
     report_json_path = temp_path("_report.json")
 
     cmd = [
         str(exe),
-        str(input_path),
-        str(output_path),
+        str(preconditioned_path),
+        str(float_output_path),
         "--config",
         str(cfg),
         "--report-json",
@@ -730,12 +881,22 @@ def master_hiphop_cpp(
         final_dr = out_analysis.get("crest_factor_db", 0.0)
         duration = out_analysis.get("duration_seconds", 0.0)
 
+        # Export 32-bit float master WAV to official 24-bit PCM WAV with TPDF dither
+        if exp_exe and exp_exe.exists():
+            log.info("Exporting to 24-bit PCM WAV via stemy_export_review...")
+            exp_res = subprocess.run([str(exp_exe), str(float_output_path), str(output_path)], capture_output=True, text=True)
+            if exp_res.returncode != 0:
+                log.warning("stemy_export_review failed (%s), writing 24-bit PCM via soundfile fallback...", exp_res.stderr or exp_res.stdout)
+                _export_pcm24_soundfile(float_output_path, output_path)
+        else:
+            _export_pcm24_soundfile(float_output_path, output_path)
+
         if metadata or artwork_bytes:
             _embed_riff_metadata_file(output_path, metadata, artwork_bytes)
 
         elapsed = time.perf_counter() - t0
         log.info(
-            "STEMY Hip-Hop C++ Master complete — %.1fs LUFS=%.1f dBTP=%.2f DR=%.1f",
+            "STEMY Hip-Hop C++ Master complete — %.1fs LUFS=%.1f dBTP=%.2f DR=%.1f (target ceiling: -1.05 dBTP)",
             elapsed,
             final_lufs,
             final_tp,
@@ -754,6 +915,9 @@ def master_hiphop_cpp(
         }
     finally:
         safe_unlink(report_json_path)
+        safe_unlink(float_output_path)
+        if is_tmp_input:
+            safe_unlink(preconditioned_path)
 
 
 # ─────────────────────────── public API ─────────────────────────────────────

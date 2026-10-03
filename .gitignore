@@ -17,3 +17,6 @@ prisma/*.db
 prisma/*.db-journal
 temp_auto_push.bat
 temp_interactive_push.bat
+
+venv/
+mastering_engine/venv/
