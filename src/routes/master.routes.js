@@ -48,5 +48,6 @@ router.post("/quick", authMiddleware, handleUpload, createQuickMaster);
 router.get("/", authMiddleware, listMasters);
 router.get("/:id", authMiddleware, getMasterById);
 router.get("/:id/download", authMiddleware, getMasterDownload);
+router.get("/:id/download/:filename", authMiddleware, getMasterDownload);
 
 export default router;

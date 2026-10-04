@@ -452,11 +452,27 @@ const runMasteringJob = async (jobData) => {
       throw new Error(`Python Engine Error: ${pythonResponse.statusText} - ${errorText}`);
     }
 
-    const lufs = parseFloat(pythonResponse.headers.get("X-Lufs-Actual")) || -14;
-    const dbtp = parseFloat(pythonResponse.headers.get("X-Tp-Actual")) || -1;
-    const dr = parseFloat(pythonResponse.headers.get("X-DR-Actual")) || 6;
-    const duration = parseFloat(pythonResponse.headers.get("X-Duration-Actual")) || 0;
-    const pyTime = pythonResponse.headers.get("X-Processing-Time-Ms");
+    const getHeader = (name) => {
+      if (!pythonResponse.headers) return null;
+      const v = pythonResponse.headers.get(name);
+      if (v != null) return v;
+      return pythonResponse.headers.get(name.toLowerCase());
+    };
+
+    const lufsHeader = getHeader("X-Lufs-Actual");
+    const dbtpHeader = getHeader("X-Tp-Actual");
+    const drHeader = getHeader("X-DR-Actual");
+    const durationHeader = getHeader("X-Duration-Actual");
+    const pyTime = getHeader("X-Processing-Time-Ms");
+
+    const lufs = (lufsHeader != null && !isNaN(parseFloat(lufsHeader))) ? parseFloat(lufsHeader) : -14;
+    const dbtp = (dbtpHeader != null && !isNaN(parseFloat(dbtpHeader))) ? parseFloat(dbtpHeader) : -1;
+    const dr = (drHeader != null && !isNaN(parseFloat(drHeader))) ? parseFloat(drHeader) : 6;
+    const duration = (durationHeader != null && !isNaN(parseFloat(durationHeader))) ? parseFloat(durationHeader) : 0;
+
+    console.log(
+      `[QUICK MASTER] Engine response headers — LUFS=${lufs} dBTP=${dbtp} DR=${dr} dur=${duration}s pyTime=${pyTime}ms`,
+    );
 
     const outputKey = `masters/${master.userId}/${Date.now()}-mastered-${master.sourceName}`;
     const tmpPath = getMasterOutputPath(masterId);

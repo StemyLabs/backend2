@@ -56,7 +56,20 @@ const ALLOWED_MIME = new Set([
   "application/octet-stream",
 ]);
 
-const getDownloadFilename = (master, ext) => {
+const getDownloadFilename = (master, ext, requestedFilename = null) => {
+  if (requestedFilename && typeof requestedFilename === "string") {
+    const cleanRequested = requestedFilename
+      .replace(/[/\\?%*:|"<>]/g, "")
+      .trim()
+      .replace(/[. ]+$/, "");
+    if (cleanRequested) {
+      if (cleanRequested.toLowerCase().endsWith(`.${ext.toLowerCase()}`)) {
+        return cleanRequested;
+      }
+      return `${cleanRequested.replace(/\.[^.]+$/, "")}.${ext}`;
+    }
+  }
+
   let meta = master?.metadata;
   if (typeof meta === "string") {
     try {
@@ -95,8 +108,8 @@ const formatContentDisposition = (filename) => {
   return `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodedFilename}`;
 };
 
-const streamFileDownload = (res, filePath, master, { contentType, ext }) => {
-  const filename = getDownloadFilename(master, ext);
+const streamFileDownload = (res, filePath, master, { contentType, ext, requestedFilename = null }) => {
+  const filename = getDownloadFilename(master, ext, requestedFilename);
   const stat = fs.statSync(filePath);
   res.setHeader("Content-Type", contentType);
   res.setHeader("Content-Disposition", formatContentDisposition(filename));
@@ -111,16 +124,18 @@ const streamFileDownload = (res, filePath, master, { contentType, ext }) => {
   stream.pipe(res);
 };
 
-const streamWavDownload = (res, filePath, master) =>
+const streamWavDownload = (res, filePath, master, requestedFilename = null) =>
   streamFileDownload(res, filePath, master, {
     contentType: "audio/wav",
     ext: "wav",
+    requestedFilename,
   });
 
-const streamMp3Download = (res, filePath, master) =>
+const streamMp3Download = (res, filePath, master, requestedFilename = null) =>
   streamFileDownload(res, filePath, master, {
     contentType: "audio/mpeg",
     ext: "mp3",
+    requestedFilename,
   });
 
 export const createQuickMaster = async (req, res) => {
@@ -355,7 +370,9 @@ export const getMasterDownload = async (req, res) => {
     });
   }
 
-  const format = String(req.query.format || "wav").toLowerCase();
+  const requestedFilename = req.params.filename || req.query.filename || null;
+  const rawFormat = req.query.format || (req.params.filename && req.params.filename.toLowerCase().endsWith(".mp3") ? "mp3" : "wav");
+  const format = String(rawFormat || "wav").toLowerCase();
 
   if (format === "mp3") {
     try {
@@ -373,11 +390,11 @@ export const getMasterDownload = async (req, res) => {
         master.metadata,
       );
       if (cachedMp3) {
-        return streamMp3Download(res, cachedMp3, master);
+        return streamMp3Download(res, cachedMp3, master, requestedFilename);
       }
 
       const mp3Path = await getMasterMp3Path(master.id, wavPath, master.metadata);
-      return streamMp3Download(res, mp3Path, master);
+      return streamMp3Download(res, mp3Path, master, requestedFilename);
     } catch (err) {
       console.error("[DOWNLOAD] MP3 conversion failed:", err.message);
       return res.status(500).json({
@@ -388,7 +405,7 @@ export const getMasterDownload = async (req, res) => {
 
   const localPath = resolveLocalWavPath(master);
   if (localPath) {
-    return streamWavDownload(res, localPath, master);
+    return streamWavDownload(res, localPath, master, requestedFilename);
   }
 
   // Fall back to R2 (or wait if background upload still running)
@@ -400,7 +417,7 @@ export const getMasterDownload = async (req, res) => {
 
   const signedUrl = await getDownloadUrl(master.outputUrl);
 
-  const filename = getDownloadFilename(master, "wav");
+  const filename = getDownloadFilename(master, "wav", requestedFilename);
 
   res.setHeader("Content-Type", "audio/wav");
   res.setHeader("Content-Disposition", formatContentDisposition(filename));
