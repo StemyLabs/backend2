@@ -727,6 +727,28 @@ def _get_stemy_export_bin() -> Path | None:
     return None
 
 
+def _get_boombap_bin() -> Path | None:
+    env_bin = os.environ.get("STEMY_BOOMBAP_BIN")
+    if env_bin and Path(env_bin).exists():
+        return Path(env_bin)
+
+    base = Path(__file__).resolve().parent.parent / "boombap" / "build"
+    candidates = [
+        base / "MasteringService_artefacts" / "Release" / "MasteringService.exe",
+        base / "MasteringService_artefacts" / "Release" / "MasteringService",
+        base / "MasteringService_artefacts" / "Debug" / "MasteringService.exe",
+        base / "MasteringService_artefacts" / "Debug" / "MasteringService",
+        base / "Release" / "MasteringService.exe",
+        base / "Debug" / "MasteringService.exe",
+        base / "MasteringService.exe",
+        base / "MasteringService",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
 def _export_pcm24_soundfile(src_path: Path, dst_path: Path) -> None:
     data, sr = sf.read(str(src_path), dtype="float32", always_2d=True)
     sf.write(str(dst_path), data, sr, format="WAV", subtype="PCM_24")
@@ -920,6 +942,80 @@ def master_hiphop_cpp(
             safe_unlink(preconditioned_path)
 
 
+def master_boombap_cpp(
+    input_path: Path | str,
+    output_path: Path | str,
+    *,
+    metadata: dict | None = None,
+    artwork_bytes: bytes | None = None,
+) -> dict:
+    exe = _get_boombap_bin()
+    if not exe:
+        raise RuntimeError("STEMY Boom Bap C++ engine (MasteringService) executable is missing.")
+
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    preconditioned_path, is_tmp_input = _ensure_cpp_compliant_input(input_path)
+
+    raw_output_path = temp_path("_boombap_raw.wav")
+
+    cmd = [
+        str(exe),
+        "-f",
+        str(preconditioned_path),
+        str(raw_output_path),
+    ]
+
+    log.info("Executing STEMY Boom Bap C++ engine: %s", " ".join(cmd))
+    t0 = time.perf_counter()
+    res = subprocess.run(cmd, capture_output=True, text=True)
+
+    try:
+        if res.returncode != 0:
+            log.error("STEMY Boom Bap C++ engine error (exit code %d): %s", res.returncode, res.stderr or res.stdout)
+            raise RuntimeError(f"Boom Bap C++ mastering engine failed: {res.stderr or res.stdout}")
+
+        if not raw_output_path.exists() or raw_output_path.stat().st_size < 44:
+            raise RuntimeError("STEMY Boom Bap C++ engine completed without generating output WAV.")
+
+        # Export to 24-bit PCM WAV
+        _export_pcm24_soundfile(raw_output_path, output_path)
+
+        # Measure audio output metrics
+        audio, sr = sf.read(str(output_path), dtype="float32", always_2d=True)
+        final_lufs = _lufs(audio, sr)
+        final_tp = _true_peak_db(audio)
+        final_dr = _dynamic_range(audio)
+        duration = float(len(audio)) / float(sr)
+
+        if metadata or artwork_bytes:
+            _embed_riff_metadata_file(output_path, metadata, artwork_bytes)
+
+        elapsed = time.perf_counter() - t0
+        log.info(
+            "STEMY Boom Bap C++ Master complete — %.1fs LUFS=%.1f dBTP=%.2f DR=%.1f",
+            elapsed,
+            final_lufs,
+            final_tp,
+            final_dr,
+        )
+
+        return {
+            "lufs": round(float(final_lufs), 1),
+            "dbtp": round(float(final_tp), 2),
+            "dr": round(float(final_dr), 1),
+            "duration": round(float(duration), 2),
+            "genre": "boombap",
+            "target_lufs": -8.5,
+            "target_tp_db": -0.5,
+            "engine": "xavier_boombap_juce",
+        }
+    finally:
+        safe_unlink(raw_output_path)
+        if is_tmp_input:
+            safe_unlink(preconditioned_path)
+
+
 # ─────────────────────────── public API ─────────────────────────────────────
 
 def master_audio_file(
@@ -954,6 +1050,20 @@ def master_audio_file(
                 )
             except Exception as exc:
                 log.warning("C++ Hip-Hop engine failed (%s), falling back to Python DSP...", exc)
+
+    if genre and genre.strip().lower() in ("boombap", "boom-bap", "boom_bap", "boom"):
+        exe = _get_boombap_bin()
+        if exe:
+            log.info("Using STEMY Boom Bap C++ Engine (Xavier JUCE)...")
+            try:
+                return master_boombap_cpp(
+                    input_path,
+                    output_path,
+                    metadata=metadata,
+                    artwork_bytes=artwork_bytes,
+                )
+            except Exception as exc:
+                log.warning("C++ Boom Bap engine failed (%s), falling back to Python DSP...", exc)
 
     if not PEDALBOARD_AVAILABLE:
         raise RuntimeError(

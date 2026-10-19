@@ -5,7 +5,7 @@ Endpoints:
   POST /master
       Body     : multipart/form-data
                    file   (required) – audio file (WAV, AIFF, FLAC, MP3 …)
-                   genre  (optional) – one of: hiphop, rnb, trap  (default: hiphop)
+                   genre  (optional) – one of: hiphop, trap, boombap, rnb  (default: hiphop)
       Response : audio/wav – 44.1 kHz / 24-bit PCM WAV, stereo
                   Headers: X-Lufs-Actual, X-Tp-Actual, X-Genre, X-Processing-Time-Ms
 
