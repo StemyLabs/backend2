@@ -559,3 +559,29 @@ export const cancelMasterJob = async (req, res) => {
     return res.status(500).json({ message: "Failed to cancel mastering job" });
   }
 };
+
+export const deleteMaster = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const master = await prisma.master.findUnique({
+      where: { id },
+    });
+
+    if (!master) {
+      return res.status(404).json({ message: "Master not found" });
+    }
+    if (master.userId !== req.userId) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    await prisma.master.delete({
+      where: { id },
+    });
+
+    console.log(`[QUICK MASTER] Master ${id} deleted by user ${req.userId}.`);
+    return res.json({ message: "Master deleted successfully" });
+  } catch (err) {
+    console.error("[QUICK MASTER] Delete error:", err);
+    return res.status(500).json({ message: "Failed to delete master" });
+  }
+};

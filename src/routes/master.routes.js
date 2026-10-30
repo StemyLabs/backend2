@@ -9,6 +9,7 @@ import {
   getMasterById,
   getMasterDownload,
   cancelMasterJob,
+  deleteMaster,
 } from "../controllers/master.controller.js";
 
 const router = express.Router();
@@ -49,6 +50,7 @@ router.post("/quick", authMiddleware, handleUpload, createQuickMaster);
 router.get("/", authMiddleware, listMasters);
 router.get("/:id", authMiddleware, getMasterById);
 router.post("/:id/cancel", authMiddleware, cancelMasterJob);
+router.delete("/:id", authMiddleware, deleteMaster);
 router.get("/:id/download", authMiddleware, getMasterDownload);
 router.get("/:id/download/:filename", authMiddleware, getMasterDownload);
 
