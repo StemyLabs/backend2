@@ -222,4 +222,76 @@ router.post(
   },
 );
 
+
+// Get user social links
+router.get("/me/social-links", authMiddleware, async (req, res) => {
+  try {
+    const latestMaster = await prisma.master.findFirst({
+      where: { userId: req.userId },
+      orderBy: { createdAt: "desc" },
+      select: { metadata: true },
+    });
+    const socialLinks = (latestMaster && latestMaster.metadata && latestMaster.metadata.socialLinks) || {};
+    return res.json({ socialLinks });
+  } catch (err) {
+    console.error("[USER] Get social links error:", err);
+    return res.status(500).json({ message: "Failed to get social links" });
+  }
+});
+
+// Update user social links with security validation
+router.put("/me/social-links", authMiddleware, async (req, res) => {
+  try {
+    const { instagram, tiktok, youtube, spotify, x, facebook } = req.body || {};
+
+    const cleanLink = (val, allowedDomain) => {
+      if (!val) return "";
+      let s = String(val).trim();
+      if (!s) return "";
+      if (s.startsWith("@")) s = `https://${allowedDomain}/${s.slice(1)}`;
+      if (!/^https?:\/\//i.test(s)) s = `https://${allowedDomain}/${s}`;
+      try {
+        const u = new URL(s);
+        if (u.protocol !== "https:" && u.protocol !== "http:") return "";
+        return u.href;
+      } catch (e) {
+        return "";
+      }
+    };
+
+    const validated = {
+      instagram: cleanLink(instagram, "instagram.com"),
+      tiktok: cleanLink(tiktok, "tiktok.com"),
+      youtube: cleanLink(youtube, "youtube.com"),
+      spotify: cleanLink(spotify, "open.spotify.com"),
+      x: cleanLink(x, "x.com"),
+      facebook: cleanLink(facebook, "facebook.com"),
+    };
+
+    const userMasters = await prisma.master.findMany({
+      where: { userId: req.userId },
+      select: { id: true, metadata: true },
+    });
+
+    for (const m of userMasters) {
+      const meta = (typeof m.metadata === "object" && m.metadata !== null) ? m.metadata : {};
+      await prisma.master.update({
+        where: { id: m.id },
+        data: {
+          metadata: {
+            ...meta,
+            socialLinks: validated,
+          },
+        },
+      });
+    }
+
+    return res.json({ message: "Social links updated", socialLinks: validated });
+  } catch (err) {
+    console.error("[USER] Update social links error:", err);
+    return res.status(500).json({ message: "Failed to update social links" });
+  }
+});
+
 export default router;
+
