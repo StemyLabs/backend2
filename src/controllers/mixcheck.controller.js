@@ -141,3 +141,4 @@ export const getMixCheckHistory = async (req, res) => {
     return res.status(500).json({ message: "Failed to load mix check history" });
   }
 };
+

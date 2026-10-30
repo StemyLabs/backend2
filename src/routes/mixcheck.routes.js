@@ -11,3 +11,4 @@ router.post("/", authMiddleware, recordMixCheck);
 router.get("/", authMiddleware, getMixCheckHistory);
 
 export default router;
+
