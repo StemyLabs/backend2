@@ -123,10 +123,11 @@ export const handleStripeWebhook = async (req, res) => {
           if (user?.email) {
             const name = user.displayName || user.firstName || null;
             const trialEnd = sub.trial_end ? new Date(sub.trial_end * 1000) : null;
+            const planDisplay = sub?.metadata?.tier === "PLUS" ? "Plus" : (updateData.plan === 'PRO' ? 'Plus' : 'Basic');
             await sendEmail({
               to: user.email,
-              subject: `Welcome to ${updateData.plan === 'PRO' ? 'Pro' : 'Basic'} — Let's make your music sound incredible`,
-              html: subscriptionWelcomeEmail(name, updateData.plan, trialEnd, env.FRONTEND_URL),
+              subject: `Welcome to ${planDisplay} — Let's make your music sound incredible`,
+              html: subscriptionWelcomeEmail(name, planDisplay, null, env.FRONTEND_URL),
             });
           }
         }
@@ -146,7 +147,7 @@ export const handleStripeWebhook = async (req, res) => {
               });
               await sendEmail({
                 to: user.email,
-                subject: "Your Stemy trial has been cancelled",
+                subject: "Your Stemy subscription has been cancelled",
                 html: cancellationScheduledEmail(name, formattedEnd, env.FRONTEND_URL),
               });
             }

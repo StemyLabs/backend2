@@ -8,6 +8,7 @@ import {
   listMasters,
   getMasterById,
   getMasterDownload,
+  cancelMasterJob,
 } from "../controllers/master.controller.js";
 
 const router = express.Router();
@@ -47,6 +48,7 @@ const handleUpload = (req, res, next) => {
 router.post("/quick", authMiddleware, handleUpload, createQuickMaster);
 router.get("/", authMiddleware, listMasters);
 router.get("/:id", authMiddleware, getMasterById);
+router.post("/:id/cancel", authMiddleware, cancelMasterJob);
 router.get("/:id/download", authMiddleware, getMasterDownload);
 router.get("/:id/download/:filename", authMiddleware, getMasterDownload);
 

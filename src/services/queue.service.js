@@ -748,3 +748,30 @@ export const enqueueMasteringJob = async (masterId, sourcePath, artworkPath = nu
 };
 
 export const getLocalDownloadPath = (masterId) => downloadCache.get(masterId);
+
+export const cancelQueuedJob = async (masterId) => {
+  if (!masteringQueue) return false;
+  try {
+    const job = await masteringQueue.getJob(masterId);
+    if (job) {
+      const state = await job.getState();
+      console.log("[QUICK MASTER] Attempting to cancel job " + masterId + " in state: " + state);
+      if (state === "waiting" || state === "delayed") {
+        await job.remove();
+        console.log("[QUICK MASTER] Removed job " + masterId + " from queue");
+        return true;
+      } else if (state === "active") {
+        try {
+          await job.discard();
+          await job.moveToFailed(new Error("Canceled by user"), true);
+        } catch (e) {
+          await job.remove().catch(() => {});
+        }
+        return true;
+      }
+    }
+  } catch (err) {
+    console.warn("[QUICK MASTER] Error canceling job " + masterId + ":", err.message);
+  }
+  return false;
+};

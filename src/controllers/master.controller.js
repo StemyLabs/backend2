@@ -1,7 +1,7 @@
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { uploadBuffer, uploadStream, getDownloadUrl } from "../services/storage.service.js";
-import { enqueueMasteringJob } from "../services/queue.service.js";
+import { enqueueMasteringJob, cancelQueuedJob } from "../services/queue.service.js";
 import {
   getMasterMp3Path,
   getMasterMp3PathIfExists,
@@ -33,6 +33,59 @@ const checkUserPlan = async (req) => {
   } catch (err) {
     console.warn("[CHECK PLAN] Subscription lookup warning:", err.message);
     return true; // Fallback to allowing access
+  }
+};
+
+
+const BASIC_MONTHLY_LIMIT = 10;
+
+const checkUserMasterQuota = async (userId) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { plan: true },
+    });
+    const subscription = await prisma.subscription.findFirst({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const plan = subscription?.plan || user?.plan || "BASIC";
+    if (plan === "PRO" || String(plan).toUpperCase() === "PLUS") {
+      return { allowed: true, limit: Infinity };
+    }
+
+    // Determine current billing period start
+    let periodStart = new Date();
+    if (subscription?.currentPeriodEnd) {
+      periodStart = new Date(subscription.currentPeriodEnd);
+      periodStart.setMonth(periodStart.getMonth() - 1);
+    } else {
+      periodStart.setDate(periodStart.getDate() - 30);
+    }
+
+    // Count only completed masters (credit protection: failed/canceled do not count!)
+    const completedCount = await prisma.master.count({
+      where: {
+        userId,
+        status: "COMPLETE",
+        createdAt: { gte: periodStart },
+      },
+    });
+
+    if (completedCount >= BASIC_MONTHLY_LIMIT) {
+      return {
+        allowed: false,
+        count: completedCount,
+        limit: BASIC_MONTHLY_LIMIT,
+        message: "You've used your 10 masters this month. Upgrade to Plus for unlimited, or wait until your plan renews.",
+      };
+    }
+
+    return { allowed: true, count: completedCount, limit: BASIC_MONTHLY_LIMIT };
+  } catch (err) {
+    console.warn("[QUICK MASTER] Quota check warning:", err.message);
+    return { allowed: true };
   }
 };
 
@@ -144,7 +197,17 @@ export const createQuickMaster = async (req, res) => {
     const hasValidPlan = await checkUserPlan(req);
     if (!hasValidPlan) {
       return res.status(403).json({ 
-        message: "Quick Master requires a Basic or Pro subscription" 
+        message: "Quick Master requires a Basic or Plus subscription" 
+      });
+    }
+
+    const quotaCheck = await checkUserMasterQuota(req.userId);
+    if (!quotaCheck.allowed) {
+      return res.status(403).json({
+        message: quotaCheck.message,
+        quotaExceeded: true,
+        limit: quotaCheck.limit,
+        count: quotaCheck.count,
       });
     }
 
@@ -440,4 +503,59 @@ export const getMasterDownload = async (req, res) => {
   });
 
   proxyReq.end();
+};
+
+
+export const cancelMasterJob = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const master = await prisma.master.findUnique({
+      where: { id },
+    });
+
+    if (!master) {
+      return res.status(404).json({ message: "Master not found" });
+    }
+    if (master.userId !== req.userId) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    if (master.status === "COMPLETE") {
+      return res.json({
+        message: "Master is already complete",
+        master,
+        canceled: false,
+      });
+    }
+
+    if (master.status === "FAILED") {
+      return res.json({
+        message: "Master already cancelled or failed",
+        master,
+        canceled: true,
+      });
+    }
+
+    // Attempt to remove / cancel active job from queue
+    await cancelQueuedJob(id);
+
+    // Update status to FAILED with Canceled error so it won't count toward quota
+    const updated = await prisma.master.update({
+      where: { id },
+      data: {
+        status: "FAILED",
+        error: "Canceled by user",
+      },
+    });
+
+    console.log(`[QUICK MASTER] Master ${id} canceled by user ${req.userId}. Quota protected.`);
+    return res.json({
+      message: "Mastering job canceled successfully. No credits deducted.",
+      canceled: true,
+      master: updated,
+    });
+  } catch (err) {
+    console.error("[QUICK MASTER] Cancel error:", err);
+    return res.status(500).json({ message: "Failed to cancel mastering job" });
+  }
 };

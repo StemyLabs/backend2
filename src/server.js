@@ -124,7 +124,7 @@ export const startServer = async () => {
 
     server = app.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on port ${PORT}`);
-      startTrialReminderCron();
+      // startTrialReminderCron(); // Disabled for V3 — no free trials
       startFileRetentionCron();
     });
 

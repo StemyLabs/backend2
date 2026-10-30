@@ -4,8 +4,9 @@ import { env } from "../config/env.js";
 import { syncRetentionFromSubscriptionUpdate } from "../services/retention.service.js";
 
 const planMeta = {
-  basic: { plan: "BASIC", priceId: env.STRIPE_BASIC_PRICE_ID },
-  pro: { plan: "PRO", priceId: env.STRIPE_PRO_PRICE_ID },
+  basic: { plan: "BASIC", priceId: env.STRIPE_BASIC_PRICE_ID, tier: "BASIC" },
+  plus: { plan: "PRO", priceId: env.STRIPE_PLUS_PRICE_ID || env.STRIPE_PRO_PRICE_ID, tier: "PLUS" },
+  pro: { plan: "PRO", priceId: env.STRIPE_PRO_PRICE_ID, tier: "PRO" },
 };
 const updatableStatuses = new Set(["ACTIVE", "TRIALING", "PAST_DUE"]);
 
@@ -124,7 +125,7 @@ export const createCheckoutSession = async (req, res) => {
       return res.status(400).json({ message: "Invalid plan or price id missing" });
     }
     const planKey = String(plan || "").toLowerCase();
-    const envName = planKey === "basic" ? "STRIPE_BASIC_PRICE_ID" : "STRIPE_PRO_PRICE_ID";
+    const envName = planKey === "basic" ? "STRIPE_BASIC_PRICE_ID" : (planKey === "plus" ? "STRIPE_PLUS_PRICE_ID or STRIPE_PRO_PRICE_ID" : "STRIPE_PRO_PRICE_ID");
     const priceFormatErr = stripePriceIdError(selected.priceId, envName);
     if (priceFormatErr) {
       return res.status(400).json({ message: priceFormatErr });
@@ -162,21 +163,22 @@ export const createCheckoutSession = async (req, res) => {
       });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: req.userId },
-      select: { trialUsed: true },
-    });
     const customerId = await ensureStripeCustomerForUser(req.userId);
     const successUrl = buildFrontendUrl("thank-you.html");
     const cancelUrl = buildFrontendUrl("subscription.html?checkout=cancel");
-    const subscriptionData = user?.trialUsed
-      ? { metadata: { userId: req.userId, plan: selected.plan } }
-      : { trial_period_days: env.TRIAL_PERIOD_DAYS, metadata: { userId: req.userId, plan: selected.plan } };
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
       line_items: [{ price: selected.priceId, quantity: 1 }],
-      subscription_data: subscriptionData,
+      subscription_data: {
+        metadata: {
+          userId: req.userId,
+          plan: selected.plan,
+          tier: selected.tier || selected.plan,
+        },
+      },
+      allow_promotion_codes: true,
+      payment_method_collection: "if_required",
       success_url: successUrl,
       cancel_url: cancelUrl,
     });
@@ -237,16 +239,28 @@ export const createPortalSession = async (req, res) => {
 export const getCurrentSubscription = async (req, res) => {
   let current = await getLatestSubscription(req.userId);
   if (!current?.stripeCustomerId || !stripe) {
-    return res.json({ subscription: current, invoices: [] });
+    const periodEnd = current?.currentPeriodEnd || null;
+    return res.json({
+      subscription: current
+        ? {
+            ...current,
+            nextBillingDate: periodEnd ? periodEnd.toISOString() : null,
+          }
+        : null,
+      invoices: [],
+    });
   }
 
   if (current?.stripeSubscriptionId) {
     try {
       const stripeSub = await stripe.subscriptions.retrieve(current.stripeSubscriptionId);
+      const periodEnd = stripeSub.current_period_end
+        ? new Date(stripeSub.current_period_end * 1000)
+        : current.currentPeriodEnd;
       const patchData = {
         status: mapStripeStatus(stripeSub.status),
-        currentPeriodEnd: stripeSub.current_period_end ? new Date(stripeSub.current_period_end * 1000) : current.currentPeriodEnd,
-        trialEndsAt: stripeSub.trial_end ? new Date(stripeSub.trial_end * 1000) : current.trialEndsAt,
+        currentPeriodEnd: periodEnd,
+        trialEndsAt: stripeSub.trial_end ? new Date(stripeSub.trial_end * 1000) : null,
         cancelAtPeriodEnd: Boolean(stripeSub.cancel_at_period_end),
       };
       await prisma.subscription.update({
@@ -261,20 +275,26 @@ export const getCurrentSubscription = async (req, res) => {
       current = {
         ...current,
         ...patchData,
+        currentPeriodEnd: periodEnd,
+        nextBillingDate: periodEnd ? periodEnd.toISOString() : null,
         cancelAtPeriodEnd: Boolean(stripeSub.cancel_at_period_end),
         canceledAt: stripeSub.canceled_at ? new Date(stripeSub.canceled_at * 1000) : null,
       };
     } catch (err) {
       // Keep response working even if Stripe retrieve has a transient issue.
+      const periodEnd = current.currentPeriodEnd || null;
       current = {
         ...current,
+        nextBillingDate: periodEnd ? periodEnd.toISOString() : null,
         cancelAtPeriodEnd: false,
         canceledAt: null,
       };
     }
   } else {
+    const periodEnd = current?.currentPeriodEnd || null;
     current = {
       ...current,
+      nextBillingDate: periodEnd ? periodEnd.toISOString() : null,
       cancelAtPeriodEnd: false,
       canceledAt: null,
     };

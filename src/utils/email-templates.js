@@ -135,7 +135,7 @@ export const welcomeEmail = (firstName) => LAYOUT(`
   <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;">
     <tr><td style="padding:5px 0;color:${C.muted};font-size:14px;">&bull; Upload a track and hear it mastered in under 90 seconds</td></tr>
     <tr><td style="padding:5px 0;color:${C.muted};font-size:14px;">&bull; Try genre-specific chains (Pop, Hip-Hop, R&amp;B, Rock, and more)</td></tr>
-    <tr><td style="padding:5px 0;color:${C.muted};font-size:14px;">&bull; Start your 7-day free trial &mdash; no credit card needed</td></tr>
+    <tr><td style="padding:5px 0;color:${C.muted};font-size:14px;">&bull; Master your music with analog-modeled chains</td></tr>
   </table>
   ${callout("Don't forget to verify your email with the code we just sent you to unlock all features.")}
   <p style="margin:20px 0 4px 0;color:${C.brassHi};font-size:16px;font-weight:700;">Let's make your music sound incredible.</p>
@@ -159,9 +159,9 @@ export const passwordResetOtpEmail = (otp) => LAYOUT(`
 `);
 
 export const cancellationScheduledEmail = (firstName, periodEnd, url) => LAYOUT(`
-  <h1 style="font-family:${FONT_BODY};font-size:22px;font-weight:800;line-height:1.25;color:${C.heat};margin:0 0 16px 0;">Your trial has been cancelled</h1>
+  <h1 style="font-family:${FONT_BODY};font-size:22px;font-weight:800;line-height:1.25;color:${C.heat};margin:0 0 16px 0;">Your subscription cancellation has been scheduled</h1>
   <p style="margin:0 0 12px 0;color:${C.muted};">Hey ${firstName || "artist"},</p>
-  <p style="margin:0 0 16px 0;color:${C.muted};">Your STEMY trial has been cancelled. You will continue to have access until <strong style="color:${C.bone};">${periodEnd}</strong>.</p>
+  <p style="margin:0 0 16px 0;color:${C.muted};">Your STEMY subscription cancellation has been scheduled. You will continue to have access until <strong style="color:${C.bone};">${periodEnd}</strong>.</p>
   <p style="margin:0 0 12px 0;color:${C.muted};">After this date, your subscription will end and you&rsquo;ll lose access to mastering. No further charges will be made.</p>
   <p style="margin:0 0 16px 0;font-family:${FONT_MONO};font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:${C.brassHi};font-weight:700;">Change your mind?</p>
   ${ctaButton(url, "Resubscribe")}
@@ -198,7 +198,7 @@ export const subscriptionWelcomeEmail = (firstName, plan, trialEndsAt, url) => {
   }
   <p style="margin:0 0 12px 0;font-family:${FONT_MONO};font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:${C.brassHi};font-weight:700;">Unlocked</p>
   <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;">
-    <tr><td style="padding:5px 0;color:${C.muted};font-size:14px;">&bull; Master unlimited tracks</td></tr>
+    <tr><td style="padding:5px 0;color:${C.muted};font-size:14px;">&bull; Master 10 tracks every month (Basic) or unlimited (Plus)</td></tr>
     <tr><td style="padding:5px 0;color:${C.muted};font-size:14px;">&bull; Choose from genre-specific chains</td></tr>
     <tr><td style="padding:5px 0;color:${C.muted};font-size:14px;">&bull; Download high-quality 24-bit WAV files</td></tr>
   </table>
