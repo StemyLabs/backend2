@@ -10,9 +10,13 @@ import {
   incrementPlayCount,
   downloadShareMp3,
   streamShareAudio,
+  getMasterDetailsForShare,
 } from "../controllers/share.controller.js";
 
 const router = express.Router();
+
+// Public master details for share builder
+router.get("/master-details/:masterId", getMasterDetailsForShare);
 
 // Owner actions (Authenticated)
 router.post("/", authMiddleware, createOrUpdateSharePage);

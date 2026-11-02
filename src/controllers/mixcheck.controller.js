@@ -126,6 +126,7 @@ export const getMixCheckHistory = async (req, res) => {
           versions: checks,
           latestScore: checks[checks.length - 1].score,
           latestVerdict: checks[checks.length - 1].verdict,
+          sharePage: meta.sharePage || null,
         });
       }
     });

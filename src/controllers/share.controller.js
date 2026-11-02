@@ -14,6 +14,37 @@ function slugify(text) {
     .replace(/^-+|-+$/g, "");
 }
 
+// 0. Get master details for share page creation (public info)
+export const getMasterDetailsForShare = async (req, res) => {
+  try {
+    const { masterId } = req.params;
+
+    const master = await prisma.master.findUnique({
+      where: { id: masterId },
+      select: {
+        id: true,
+        userId: true,
+        outputUrl: true,
+        sourceUrl: true,
+        sourceName: true,
+        sourceSize: true,
+        duration: true,
+        metadata: true,
+        status: true,
+      },
+    });
+
+    if (!master) {
+      return res.status(404).json({ message: "Master not found" });
+    }
+
+    return res.json({ master });
+  } catch (err) {
+    console.error("[SHARE] getMasterDetailsForShare error:", err);
+    return res.status(500).json({ message: "Failed to load master details" });
+  }
+};
+
 // 1. Create or update Share Page for a finished master (Owner only)
 export const createOrUpdateSharePage = async (req, res) => {
   try {
