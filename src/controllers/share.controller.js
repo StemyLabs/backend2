@@ -211,7 +211,7 @@ export const updateSharePageSettings = async (req, res) => {
     };
 
     await prisma.master.update({
-      where: { id },
+      where: { id: master.id },
       data: {
         metadata: {
           ...currentMeta,
@@ -262,7 +262,7 @@ export const deleteSharePage = async (req, res) => {
     delete updatedMeta.sharePage;
 
     await prisma.master.update({
-      where: { id },
+      where: { id: master.id },
       data: { metadata: updatedMeta },
     });
 
