@@ -178,6 +178,13 @@ export const getSharePage = async (req, res) => {
       });
     }
 
+    // Fallback if artworkUrl is missing or invalid blob URL
+    if (!page.artworkUrl || page.artworkUrl.startsWith("blob:")) {
+      if (master.metadata?.artworkUrl && !master.metadata.artworkUrl.startsWith("blob:")) {
+        page.artworkUrl = master.metadata.artworkUrl;
+      }
+    }
+
     // Ensure audioUrl is playable over HTTP
     if (!page.audioUrl || !page.audioUrl.startsWith("http")) {
       const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
@@ -251,6 +258,13 @@ export const updateSharePageSettings = async (req, res) => {
       ...(title !== undefined && { title: String(title).trim() }),
       updatedAt: new Date().toISOString(),
     };
+
+    // Fallback if artworkUrl is missing or invalid blob URL
+    if (!page.artworkUrl || page.artworkUrl.startsWith("blob:")) {
+      if (master.metadata?.artworkUrl && !master.metadata.artworkUrl.startsWith("blob:")) {
+        page.artworkUrl = master.metadata.artworkUrl;
+      }
+    }
 
     // Ensure audioUrl is playable over HTTP
     if (!page.audioUrl || !page.audioUrl.startsWith("http")) {
